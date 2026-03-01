@@ -1,5 +1,5 @@
 {
-  "name": "opencode-memory",
+  "name": "@solidmelon/opencode-memory",
   "version": "1.0.4",
   "description": "Persistent memory system for OpenCode - cross-session context with AI compression",
   "type": "module",
