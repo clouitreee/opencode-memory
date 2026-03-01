@@ -26,6 +26,12 @@ import {
 import { getSDK } from "./sdk";
 import { smartContextInjection, formatContextForInjection, searchUserObservations } from "./search";
 import { stripAllMemoryTags, isFullyPrivate, truncateInput, truncateOutput } from "./privacy";
+import { 
+  redactSecrets, 
+  getSecurityConfig, 
+  logRedaction,
+  type ToolContext 
+} from "./secrets";
 import { memSearchTool } from "./tools/mem-search";
 
 const SKIP_TOOLS = new Set([
@@ -52,7 +58,6 @@ function getSessionIdFromEvent(event: unknown): string | null {
   const e = event as Record<string, unknown>;
   const props = e.properties as Record<string, unknown> | undefined;
   
-  // Try different paths
   if (props?.sessionID && typeof props.sessionID === "string") {
     return props.sessionID;
   }
@@ -164,6 +169,7 @@ export const OpenCodeMemoryPlugin: Plugin = async (input: PluginInput): Promise<
   const db = getDB();
   const compressionEnabled = getSetting("compression_enabled") !== "false";
   const maxObservations = parseInt(getSetting("max_observations_context") || "50", 10);
+  const securityConfig = getSecurityConfig();
   
   const activeSessions = new Map<string, { dbId: number; promptNumber: number; observations: string[] }>();
   
@@ -171,7 +177,7 @@ export const OpenCodeMemoryPlugin: Plugin = async (input: PluginInput): Promise<
     body: {
       service: "opencode-memory",
       level: "info",
-      message: `Plugin initialized for project: ${projectName}`,
+      message: `Plugin initialized for project: ${projectName} (security: ${securityConfig.enabled ? "enabled" : "disabled"})`,
     }
   });
 
@@ -297,7 +303,22 @@ export const OpenCodeMemoryPlugin: Plugin = async (input: PluginInput): Promise<
       const messages = output.parts.filter(p => p.type === "text");
       for (const part of messages) {
         if ("text" in part && part.text) {
-          const cleanedText = stripAllMemoryTags(part.text);
+          let cleanedText = stripAllMemoryTags(part.text);
+          
+          if (securityConfig.enabled) {
+            const redacted = redactSecrets(cleanedText, { toolName: "user_prompt", toolInput: {} }, securityConfig);
+            
+            if (redacted.redactedCount > 0) {
+              await client.app.log({
+                body: {
+                  service: "opencode-memory",
+                  level: "warn",
+                  message: `Redacted ${redacted.redactedCount} secrets from user prompt`,
+                }
+              });
+              cleanedText = redacted.text;
+            }
+          }
           
           if (!isFullyPrivate(cleanedText)) {
             const promptNumber = updateSessionPrompt(session.dbId, cleanedText);
@@ -320,26 +341,55 @@ export const OpenCodeMemoryPlugin: Plugin = async (input: PluginInput): Promise<
         activeSessions.set(sessionId, session);
       }
       
-      const cleanedInput = truncateInput(JSON.parse(
-        stripAllMemoryTags(JSON.stringify(input.args || {}))
-      ));
-      const cleanedOutput = truncateOutput(stripAllMemoryTags(output.output));
+      const securityContext: ToolContext = {
+        toolName: input.tool,
+        toolInput: input.args || {}
+      };
       
-      if (isFullyPrivate(cleanedOutput)) return;
+      const inputStr = truncateInput(stripAllMemoryTags(JSON.stringify(input.args || {})));
+      const outputStr = truncateOutput(stripAllMemoryTags(
+        typeof output.output === "string" ? output.output : JSON.stringify(output.output)
+      ));
+      
+      let finalInput = inputStr;
+      let finalOutput = outputStr;
+      let redactedCount = 0;
+      
+      if (securityConfig.enabled) {
+        const redactedInput = redactSecrets(inputStr, securityContext, securityConfig);
+        const redactedOutput = redactSecrets(outputStr, securityContext, securityConfig);
+        
+        finalInput = redactedInput.text;
+        finalOutput = redactedOutput.text;
+        redactedCount = redactedInput.redactedCount + redactedOutput.redactedCount;
+        
+        if (redactedCount > 0) {
+          await client.app.log({
+            body: {
+              service: "opencode-memory",
+              level: "warn",
+              message: `Redacted ${redactedCount} secrets from ${input.tool}`,
+            }
+          });
+          
+          console.warn(`[opencode-memory] Security: Redacted ${redactedCount} potential secrets from ${input.tool} tool`);
+        }
+      }
+      
+      if (isFullyPrivate(finalOutput)) return;
       
       const obsId = saveObservation(
         session.dbId,
         input.tool,
-        cleanedInput,
-        cleanedOutput,
+        finalInput,
+        finalOutput,
         session.promptNumber
       );
       
-      session.observations.push(`${input.tool}: ${cleanedInput.slice(0, 200)}`);
+      session.observations.push(`${input.tool}: ${finalInput.slice(0, 200)}`);
       
       if (compressionEnabled) {
         queueCompression(obsId);
-        
         setTimeout(() => processCompressionQueue(), 100);
       }
     },
@@ -364,6 +414,7 @@ export const OpenCodeMemoryPlugin: Plugin = async (input: PluginInput): Promise<
 - Total observations: ${stats.totalObservations}
 - User-level memories: ${stats.totalUserObservations}
 - Pending compressions: ${stats.pendingCompressions}
+- Security: ${securityConfig.enabled ? "enabled" : "disabled"}
         `);
       }
     },
@@ -405,4 +456,13 @@ export {
   formatContextForInjection 
 } from "./search";
 export { stripAllMemoryTags, stripPrivateTags, isFullyPrivate, truncateInput, truncateOutput } from "./privacy";
+export { 
+  redactSecrets, 
+  getSecurityConfig, 
+  setSecurityConfig,
+  isContextSensitive,
+  type ToolContext,
+  type RedactionResult,
+  type SecurityConfig 
+} from "./secrets";
 export { memSearchTool } from "./tools/mem-search";
