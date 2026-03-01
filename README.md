@@ -365,6 +365,25 @@ bun link
 # Then add to OpenCode config: "plugin": ["opencode-memory"]
 ```
 
+## Verification
+
+To verify security fixes and tests are passing, use the repo-root verification script:
+
+```bash
+# From anywhere (script auto-detects repo root)
+./scripts/verify.sh
+
+# Or with full path
+/path/to/opencode-memory/scripts/verify.sh
+```
+
+This script:
+- ✅ Runs all unit tests
+- ✅ Builds the plugin
+- ✅ Verifies no direct `JSON.parse()` on LLM content (security check)
+
+**Note:** Always run verification from repo root or use the script—avoid `grep` from `~` as paths will be relative.
+
 ## Recommended Models
 
 | Provider | Model | Notes |
