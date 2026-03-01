@@ -194,7 +194,9 @@ export const OpenCodeMemoryPlugin: Plugin = async (input: PluginInput): Promise<
           ensureInitialized();
           
           const dbId = createSession(sessionId, projectName, directory);
-          activeSessions.set(sessionId, { dbId, promptNumber: 0, observations: [] });
+          if (dbId) {
+            activeSessions.set(sessionId, { dbId, promptNumber: 0, observations: [] });
+          }
           
           const recentObs = smartContextInjection(projectName, undefined, maxObservations);
           const userObs = getUserObservations(5);
@@ -291,11 +293,14 @@ export const OpenCodeMemoryPlugin: Plugin = async (input: PluginInput): Promise<
     
     "chat.message": async (input, output) => {
       const sessionId = input.sessionID;
+      if (!sessionId) return;
+      
       let session = activeSessions.get(sessionId);
       
       if (!session) {
         ensureInitialized();
         const dbId = createSession(sessionId, projectName, directory);
+        if (!dbId) return;
         session = { dbId, promptNumber: 0, observations: [] };
         activeSessions.set(sessionId, session);
       }
@@ -332,11 +337,14 @@ export const OpenCodeMemoryPlugin: Plugin = async (input: PluginInput): Promise<
       if (SKIP_TOOLS.has(input.tool)) return;
       
       const sessionId = input.sessionID;
+      if (!sessionId) return;
+      
       let session = activeSessions.get(sessionId);
       
       if (!session) {
         ensureInitialized();
         const dbId = createSession(sessionId, projectName, directory);
+        if (!dbId) return;
         session = { dbId, promptNumber: 0, observations: [] };
         activeSessions.set(sessionId, session);
       }
@@ -444,7 +452,7 @@ export {
   getStats
 } from "./db";
 
-export { getSDK, initSDK, resetSDK, MemorySDK } from "./sdk";
+export { getSDK, initSDK, resetSDK } from "./sdk";
 export { 
   searchObservations, 
   searchSessions, 

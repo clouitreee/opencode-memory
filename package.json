@@ -16,7 +16,7 @@
     "migrations"
   ],
   "scripts": {
-    "build": "bun build ./src/plugin.ts --outdir ./dist --target bun --minify",
+    "build": "bun build ./src/plugin.ts --outdir ./dist --target bun --external @opencode-ai/plugin --external @opencode-ai/sdk --external zod",
     "dev": "bun --watch ./src/plugin.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",

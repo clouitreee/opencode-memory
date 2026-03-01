@@ -138,11 +138,16 @@ export interface MemoryConfig {
 // ============ SESSION OPERATIONS ============
 
 export function createSession(
-  opencodeSessionId: string, 
+  opencodeSessionId: string | null | undefined, 
   project: string, 
   directory?: string,
   scope: "user" | "project" = "project"
-): number {
+): number | null {
+  if (!opencodeSessionId) {
+    console.warn("[opencode-memory] createSession called with null/undefined session ID");
+    return null;
+  }
+  
   const database = getDB();
   
   const existing = database.prepare(`

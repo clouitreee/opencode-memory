@@ -17,7 +17,7 @@ const PROVIDERS: Record<string, string> = {
 };
 
 const DEFAULT_MODELS: Record<string, string> = {
-  openrouter: "openrouter/z-ai/glm-5",
+  openrouter: "anthropic/claude-3.5-haiku",
   openai: "gpt-4o-mini",
   anthropic: "claude-3-5-haiku-20241022",
   moonshot: "moonshot-v1-8k",
