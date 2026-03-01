@@ -1,10 +1,29 @@
 import OpenAI from "openai";
+import { readFileSync, existsSync } from "fs";
+import { join } from "path";
+import { homedir } from "os";
 
 export interface SDKConfig {
   provider: "openrouter" | "openai" | "anthropic" | "moonshot" | "zhipu" | "local";
   model?: string;
   apiKey?: string;
   baseURL?: string;
+}
+
+interface OpenCodeProviderConfig {
+  npm?: string;
+  name?: string;
+  options?: {
+    baseURL?: string;
+    apiKey?: string;
+    headers?: Record<string, string>;
+  };
+  models?: Record<string, { name?: string; limit?: { context?: number; output?: number } }>;
+}
+
+interface OpenCodeConfig {
+  provider?: Record<string, OpenCodeProviderConfig>;
+  model?: string;
 }
 
 const PROVIDERS: Record<string, string> = {
@@ -64,21 +83,106 @@ Output JSON with:
 
 Only extract memories that are truly user-level (not project-specific).`;
 
-function getEnvProvider(): SDKConfig["provider"] {
-  const provider = process.env.OPENCODE_MEMORY_PROVIDER?.toLowerCase();
-  if (provider && PROVIDERS[provider]) {
-    return provider as SDKConfig["provider"];
+function getOpenCodeConfig(): OpenCodeConfig | null {
+  const configPaths = [
+    join(homedir(), ".config", "opencode", "config.json"),
+    join(homedir(), ".opencode", "config.json"),
+  ];
+  
+  for (const configPath of configPaths) {
+    if (existsSync(configPath)) {
+      try {
+        const content = readFileSync(configPath, "utf-8");
+        return JSON.parse(content);
+      } catch {
+        // Ignore parse errors
+      }
+    }
   }
+  return null;
+}
+
+function detectProviderFromConfig(config: OpenCodeConfig | null): SDKConfig["provider"] | null {
+  if (!config?.provider) return null;
+  
+  const providerKeys = Object.keys(config.provider);
+  for (const key of providerKeys) {
+    const normalized = key.toLowerCase();
+    if (normalized in PROVIDERS) {
+      return normalized as SDKConfig["provider"];
+    }
+    if (normalized === "openrouter") return "openrouter";
+    if (normalized === "openai") return "openai";
+    if (normalized === "anthropic") return "anthropic";
+  }
+  return null;
+}
+
+function getApiKeyFromConfig(config: OpenCodeConfig | null, provider: SDKConfig["provider"]): string | null {
+  if (!config?.provider) return null;
+  
+  for (const [key, value] of Object.entries(config.provider)) {
+    const normalized = key.toLowerCase();
+    if (normalized === provider || normalized === "openrouter") {
+      return value?.options?.apiKey || null;
+    }
+  }
+  return null;
+}
+
+function getEnvProvider(): SDKConfig["provider"] {
+  const envProvider = process.env.OPENCODE_MEMORY_PROVIDER?.toLowerCase();
+  if (envProvider && envProvider in PROVIDERS) {
+    return envProvider as SDKConfig["provider"];
+  }
+  
+  const config = getOpenCodeConfig();
+  const configProvider = detectProviderFromConfig(config);
+  if (configProvider) {
+    return configProvider;
+  }
+  
   return "openrouter";
 }
 
 function getEnvApiKey(provider: SDKConfig["provider"]): string {
+  // Priority: env var > OpenCode config > fallback
   const envVar = API_KEY_ENV_VARS[provider];
-  return process.env[envVar] || process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY || "";
+  const envKey = process.env[envVar] || process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY;
+  if (envKey) return envKey;
+  
+  const config = getOpenCodeConfig();
+  const configKey = getApiKeyFromConfig(config, provider);
+  if (configKey) return configKey;
+  
+  // Try any API key from config
+  if (config?.provider) {
+    for (const [, value] of Object.entries(config.provider)) {
+      if (value?.options?.apiKey) {
+        return value.options.apiKey;
+      }
+    }
+  }
+  
+  return "";
 }
 
 function getEnvModel(provider: SDKConfig["provider"]): string {
-  return process.env.OPENCODE_MEMORY_MODEL || DEFAULT_MODELS[provider] || DEFAULT_MODELS.openrouter;
+  if (process.env.OPENCODE_MEMORY_MODEL) {
+    return process.env.OPENCODE_MEMORY_MODEL;
+  }
+  
+  const config = getOpenCodeConfig();
+  if (config?.model) {
+    let model = config.model;
+    // Strip provider prefix if present (e.g., "openrouter/minimax/m2.5" -> "minimax/m2.5")
+    if (provider === "openrouter") {
+      model = model.replace(/^openrouter\//, "");
+    }
+    return model;
+  }
+  
+  return DEFAULT_MODELS[provider] || DEFAULT_MODELS.openrouter;
 }
 
 export class MemorySDK {
@@ -92,14 +196,26 @@ export class MemorySDK {
     const baseURL = config?.baseURL || PROVIDERS[this.provider];
     this.model = config?.model || getEnvModel(this.provider);
     
+    if (!apiKey) {
+      console.warn(
+        `[opencode-memory] No API key found for ${this.provider}. ` +
+        `Set ${API_KEY_ENV_VARS[this.provider]} env var or add apiKey to ~/.config/opencode/config.json. ` +
+        `Compression will be disabled.`
+      );
+    }
+    
     this.client = new OpenAI({
-      apiKey,
+      apiKey: apiKey || "no-key",
       baseURL,
       defaultHeaders: this.provider === "openrouter" ? {
         "HTTP-Referer": "https://github.com/clouitreee/opencode-memory",
         "X-Title": "opencode-memory"
       } : undefined
     });
+  }
+  
+  hasApiKey(): boolean {
+    return !!this.client.apiKey && this.client.apiKey !== "no-key";
   }
   
   async compressObservation(
