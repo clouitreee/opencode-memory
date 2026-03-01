@@ -75,7 +75,7 @@ bash install.sh
 
 ```bash
 # Install
-npm install -g opencode-memory
+bun install -g @solidmelon/opencode-memory
 
 # Or use the installer
 curl -fsSL https://i.longmem.workers.dev/install | bash
@@ -88,7 +88,7 @@ opencode run "mem-search stats"
 
 ```bash
 # Install
-npm install -g opencode-memory
+bun install -g @solidmelon/opencode-memory
 
 # Generate AGENTS files
 longmem init
@@ -102,7 +102,7 @@ longmem generate --codex
 
 ```bash
 # Install
-npm install -g opencode-memory
+bun install -g @solidmelon/opencode-memory
 
 # Generate config
 longmem generate --gemini
@@ -119,7 +119,7 @@ gemini
 
 ```bash
 # Install
-npm install -g opencode-memory
+bun install -g @solidmelon/opencode-memory
 
 # Generate wrapper
 longmem generate --claude
@@ -201,7 +201,7 @@ export OPENCODE_MEMORY_MODEL="gpt-4o-mini"
 ### Memory Settings
 
 ```typescript
-import { setMemoryConfig } from "opencode-memory";
+import { setMemoryConfig } from "@solidmelon/opencode-memory";
 
 setMemoryConfig({
   max_observations_per_project: 500,
@@ -362,7 +362,7 @@ bun test
 
 # Run locally
 bun link
-# Then add to OpenCode config: "plugin": ["opencode-memory"]
+# Then add to OpenCode config: "plugin": ["@solidmelon/opencode-memory"]
 ```
 
 ## Verification

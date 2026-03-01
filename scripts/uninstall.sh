@@ -6,7 +6,7 @@
 set -euo pipefail
 
 # ============ CONFIG ============
-PLUGIN_NAME="opencode-memory"
+PLUGIN_NAME="@solidmelon/opencode-memory"
 PURGE=false
 NO_BACKUP=false
 

@@ -9,7 +9,7 @@ set -euo pipefail
 # ============ CONFIG ============
 REPO_URL="https://github.com/clouitreee/opencode-memory"
 RELEASE_URL="https://github.com/clouitreee/opencode-memory/releases/latest/download"
-PLUGIN_NAME="opencode-memory"
+PLUGIN_NAME="@solidmelon/opencode-memory"
 VERSION="${OPENCODE_MEMORY_VERSION:-latest}"
 SCOPE="global"
 PROVIDER=""
