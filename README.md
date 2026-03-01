@@ -2,7 +2,7 @@
 
 Persistent memory system for [OpenCode](https://opencode.ai) - cross-session context with AI compression.
 
-## Quick Install (1 command)
+## Install
 
 ```bash
 curl -fsSL https://i.longmem.workers.dev/install | bash
@@ -14,24 +14,17 @@ curl -fsSL https://i.longmem.workers.dev/install | bash
 curl -fsSL https://i.longmem.workers.dev/uninstall | bash
 ```
 
-To remove all data including memories:
+Purge all data:
 
 ```bash
 curl -fsSL https://i.longmem.workers.dev/uninstall | bash -s -- --purge
 ```
 
-## Manual (Auditable)
-
-If you prefer to review the script before running:
+## Manual
 
 ```bash
-# 1. Download
 curl -fsSLo install.sh https://i.longmem.workers.dev/install
-
-# 2. Review
 cat install.sh
-
-# 3. Run
 bash install.sh
 ```
 
