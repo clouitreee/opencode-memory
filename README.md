@@ -280,8 +280,8 @@ bun link
 
 | Provider | Model | Notes |
 |----------|-------|-------|
-| OpenRouter | `anthropic/claude-3.5-haiku` | Default, fast & cheap |
-| OpenRouter | `anthropic/claude-3.5-sonnet` | Better quality |
+| OpenRouter | `anthropic/claude-haiku-4.5` | Default, fast & cheap |
+| OpenRouter | `anthropic/claude-sonnet-4.6` | Better quality |
 | OpenAI | `gpt-4o-mini` | Fast and cheap |
 | Local | `llama3.2` | Privacy via Ollama |
 
