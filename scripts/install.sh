@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # opencode-memory installer
-# Usage: curl -sSL https://.../install.sh | bash
+# Usage: curl -fsSL https://i.longmem.workers.dev/install | bash
 #        or: ./install.sh [--scope global|project] [--provider NAME] [--model MODEL]
 #
 set -euo pipefail
@@ -16,6 +16,7 @@ PROVIDER=""
 MODEL=""
 VERBOSE=false
 NO_BACKUP=false
+INSTALLER_URL="https://i.longmem.workers.dev"
 
 # ============ COLORS ============
 RED='\033[0;31m'
@@ -111,13 +112,11 @@ download_release() {
     
     log_info "Downloading $PLUGIN_NAME $VERSION..."
     
-    # Try npm first
     if bun add --global "$PLUGIN_NAME" 2>/dev/null; then
         log_ok "Installed from npm"
         return 0
     fi
     
-    # Fallback to GitHub
     local tarball_url
     if [ "$VERSION" = "latest" ]; then
         tarball_url="$RELEASE_URL/opencode-memory.tar.gz"
@@ -142,14 +141,12 @@ install_from_source() {
     log_info "Installing from source..."
     
     if [ -d ".git" ] && [ -f "src/plugin.ts" ]; then
-        # We're in the repo
         mkdir -p "$install_dir"
-        cp -r dist migrations package.json "$install_dir/"
+        cp -r dist migrations package.json commands "$install_dir/" 2>/dev/null || true
         log_ok "Installed from local source"
         return 0
     fi
     
-    # Clone from GitHub
     local tmp_dir
     tmp_dir=$(mktemp -d)
     trap "rm -rf $tmp_dir" EXIT
@@ -160,7 +157,7 @@ install_from_source() {
     bun run build
     
     mkdir -p "$install_dir"
-    cp -r dist migrations package.json "$install_dir/"
+    cp -r dist migrations package.json commands "$install_dir/" 2>/dev/null || true
     
     log_ok "Built from source"
     return 0
@@ -173,21 +170,17 @@ configure_plugin() {
     
     mkdir -p "$config_dir"
     
-    # Backup existing config
     backup_file "$config_file"
     
-    # Create or update config
     if [ ! -f "$config_file" ]; then
         echo '{}' > "$config_file"
     fi
     
-    # Add plugin to config
     local plugin_entry="opencode-memory"
     if [ "$SCOPE" = "project" ]; then
         plugin_entry="./.opencode/plugins/opencode-memory"
     fi
     
-    # Use a simple approach with bun
     bun -e "
         const fs = require('fs');
         const configPath = '$config_file';
@@ -205,19 +198,49 @@ configure_plugin() {
     log_ok "Plugin registered in OpenCode config"
 }
 
+install_commands() {
+    local install_dir
+    install_dir=$(get_plugin_install_dir)
+    local commands_src="$install_dir/commands"
+    
+    if [ ! -d "$commands_src" ]; then
+        log_info "No commands to install"
+        return 0
+    fi
+    
+    local commands_dest
+    if [ "$SCOPE" = "project" ]; then
+        commands_dest="$(pwd)/.opencode/commands"
+    else
+        commands_dest="$(get_opencode_config_dir)/commands"
+    fi
+    
+    mkdir -p "$commands_dest"
+    
+    local cmd_count=0
+    for cmd_file in "$commands_src"/*.md; do
+        if [ -f "$cmd_file" ]; then
+            cp "$cmd_file" "$commands_dest/"
+            cmd_count=$((cmd_count + 1))
+        fi
+    done
+    
+    if [ $cmd_count -gt 0 ]; then
+        log_ok "Installed $cmd_count slash commands to $commands_dest"
+    fi
+}
+
 verify_installation() {
     log_info "Verifying installation..."
     
     local install_dir
     install_dir=$(get_plugin_install_dir)
     
-    # Check dist exists
     if [ ! -f "$install_dir/dist/plugin.js" ]; then
         log_error "Plugin not found at $install_dir/dist/plugin.js"
         return 1
     fi
     
-    # Check migrations exist
     if [ ! -d "$install_dir/migrations" ]; then
         log_error "Migrations directory not found"
         return 1
@@ -225,7 +248,6 @@ verify_installation() {
     
     log_ok "Plugin files verified"
     
-    # Check DB initialization
     local db_path="$HOME/.opencode-memory/memory.db"
     if [ -f "$db_path" ]; then
         bun -e "
@@ -240,7 +262,35 @@ verify_installation() {
         " 2>/dev/null && log_ok "Database initialized" || log_warn "Database may need initialization"
     fi
     
+    local tool_output
+    tool_output=$(opencode run "mem-search stats" 2>&1 || true)
+    
+    if echo "$tool_output" | grep -q "Total Sessions\|Total sessions\|observations\|Sessions:"; then
+        log_ok "mem-search tool working"
+        if [ "$VERBOSE" = true ]; then
+            echo "$tool_output"
+        fi
+    elif echo "$tool_output" | grep -qi "error\|not found"; then
+        log_warn "Tool verification incomplete (may need opencode restart)"
+    fi
+    
     return 0
+}
+
+print_rollback_instructions() {
+    echo ""
+    echo -e "${RED}========================================${NC}"
+    echo -e "${RED}  Installation failed - Rolling back${NC}"
+    echo -e "${RED}========================================${NC}"
+    echo ""
+    echo "To uninstall and clean up:"
+    echo ""
+    echo "  curl -fsSL $INSTALLER_URL/uninstall | bash"
+    echo ""
+    echo "To remove all data including memories:"
+    echo ""
+    echo "  curl -fsSL $INSTALLER_URL/uninstall | bash -s -- --purge"
+    echo ""
 }
 
 print_success() {
@@ -251,6 +301,11 @@ print_success() {
     echo ""
     echo "To verify:"
     echo "  opencode run 'mem-search stats'"
+    echo ""
+    echo "Slash commands available:"
+    echo "  /mem-stats   - Show memory statistics"
+    echo "  /mem-doctor  - Run diagnostics"
+    echo "  /mem-purge   - Purge instructions"
     echo ""
     if [ -n "$PROVIDER" ]; then
         echo "Provider: $PROVIDER"
@@ -269,7 +324,7 @@ usage() {
 opencode-memory installer
 
 Usage:
-  curl -sSL https://raw.githubusercontent.com/clouitreee/opencode-memory/main/scripts/install.sh | bash
+  curl -fsSL https://i.longmem.workers.dev/install | bash
   ./install.sh [OPTIONS]
 
 Options:
@@ -283,7 +338,7 @@ Options:
 
 Examples:
   # Global installation (recommended)
-  ./install.sh
+  curl -fsSL https://i.longmem.workers.dev/install | bash
 
   # Project-specific installation
   ./install.sh --scope project
@@ -347,25 +402,23 @@ main() {
     
     log_info "Install directory: $install_dir"
     
-    # Create install directory
     mkdir -p "$install_dir"
     
-    # Install
     if download_release "$install_dir"; then
         :
     else
         install_from_source "$install_dir" || {
-            log_error "Installation failed"
+            print_rollback_instructions
             exit 1
         }
     fi
     
-    # Configure
     configure_plugin
     
-    # Verify
+    install_commands
+    
     verify_installation || {
-        log_error "Verification failed"
+        print_rollback_instructions
         exit 1
     }
     

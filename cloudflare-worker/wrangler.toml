@@ -1,0 +1,11 @@
+name = "i"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+[vars]
+GITHUB_REPO = "clouitreee/opencode-memory"
+DEFAULT_REF = "v0.1.0"
+
+[env.production.vars]
+GITHUB_REPO = "clouitreee/opencode-memory"
+DEFAULT_REF = "v0.1.0"

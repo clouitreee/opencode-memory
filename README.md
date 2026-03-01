@@ -2,44 +2,37 @@
 
 Persistent memory system for [OpenCode](https://opencode.ai) - cross-session context with AI compression.
 
-## Quick Install
-
-### For Juniors (2 commands)
+## Quick Install (1 command)
 
 ```bash
-# 1. Install the plugin
-curl -sSL https://raw.githubusercontent.com/clouitreee/opencode-memory/main/scripts/install.sh | bash
-
-# 2. Verify it works
-opencode run "mem-search stats"
+curl -fsSL https://i.longmem.workers.dev/install | bash
 ```
 
-That's it! The plugin automatically:
-- Uses your OpenCode API key (no extra config needed)
-- Creates the database with all tables
-- Starts learning from your sessions
-
-### For Engineers
+## Uninstall
 
 ```bash
-# Install with options
-./scripts/install.sh --scope global --provider openrouter
-
-# Or from npm (when published)
-bun add -g opencode-memory
-
-# Verify
-./scripts/verify.sh --verbose
+curl -fsSL https://i.longmem.workers.dev/uninstall | bash
 ```
 
-### Uninstall
+To remove all data including memories:
 
 ```bash
-# Standard uninstall (preserves memories)
-curl -sSL https://raw.githubusercontent.com/clouitreee/opencode-memory/main/scripts/uninstall.sh | bash
+curl -fsSL https://i.longmem.workers.dev/uninstall | bash -s -- --purge
+```
 
-# Complete removal including all data
-./scripts/uninstall.sh --purge
+## Manual (Auditable)
+
+If you prefer to review the script before running:
+
+```bash
+# 1. Download
+curl -fsSLo install.sh https://i.longmem.workers.dev/install
+
+# 2. Review
+cat install.sh
+
+# 3. Run
+bash install.sh
 ```
 
 ## How It Works
@@ -50,7 +43,7 @@ curl -sSL https://raw.githubusercontent.com/clouitreee/opencode-memory/main/scri
 │  (tools, chat)  │    │  (compression)   │    │  (persistent)   │
 └─────────────────┘    └──────────────────┘    └─────────────────┘
          │                                              │
-         └──────────── Context Injection ───────────────┘
+         └──────────── Context Injection ──────────────┘
                      (next session)
 ```
 
@@ -73,6 +66,16 @@ curl -sSL https://raw.githubusercontent.com/clouitreee/opencode-memory/main/scri
 | **User-Level Memory** | Cross-project preferences |
 | **Secrets Detection** | Automatic redaction of API keys |
 | **Memory Budget** | Garbage collection for old data |
+
+## Slash Commands
+
+After installation, these commands are available in OpenCode:
+
+| Command | Description |
+|---------|-------------|
+| `/mem-stats` | Show memory statistics |
+| `/mem-doctor` | Run diagnostics with detailed logs |
+| `/mem-purge` | Show instructions to purge all data |
 
 ## Configuration
 
@@ -171,7 +174,7 @@ ls ~/.local/share/opencode/plugins/opencode-memory/dist/plugin.js
 cat ~/.config/opencode/config.json | grep opencode-memory
 
 # Re-run install
-curl -sSL https://raw.githubusercontent.com/clouitreee/opencode-memory/main/scripts/install.sh | bash
+curl -fsSL https://i.longmem.workers.dev/install | bash
 ```
 
 ### "No API key found" warning
@@ -221,10 +224,10 @@ opencode run "mem-search stats" --print-logs 2>&1 | grep -i memory
 
 ```bash
 # Uninstall completely
-./scripts/uninstall.sh --purge
+curl -fsSL https://i.longmem.workers.dev/uninstall | bash -s -- --purge
 
 # Reinstall
-./scripts/install.sh
+curl -fsSL https://i.longmem.workers.dev/install | bash
 ```
 
 ## Architecture
@@ -302,14 +305,15 @@ The plugin automatically redacts:
 
 | Asset | Threat | Impact | Mitigation |
 |-------|--------|--------|------------|
-| Install scripts | Malicious code injection | System compromise | Review before running; use npm when available |
+| Install scripts | Malicious code injection | System compromise | Review before running; use version pinning |
 | API keys | Credential theft | Account compromise | Read from OpenCode config; never log; redact in memory |
 | Memory DB | Data exposure | Information leak | Local only; secrets redacted; user controls data |
 | Config files | Tampering | Plugin behavior change | Timestamped backups; idempotent operations |
 
 ### Supply Chain
 
-- **Install script**: Hosted on GitHub; review before running
+- **Install script**: Served via Cloudflare Worker with version pinning
+- **Version pinning**: Use `?ref=v0.1.0` to pin to specific version
 - **npm package**: Will be signed when published
 - **Dependencies**: Minimal (only `openai` SDK + `@opencode-ai/plugin`)
 
@@ -324,6 +328,7 @@ The plugin automatically redacts:
 | User-level memory | ✅ | ❌ |
 | Secrets detection | ✅ | ❌ |
 | Memory budget | ✅ | ❌ |
+| Shortlink installer | ✅ | ❌ |
 
 ## License
 
