@@ -1,0 +1,53 @@
+{
+  "name": "opencode-memory",
+  "version": "0.1.0",
+  "description": "Persistent memory system for OpenCode - cross-session context with AI compression",
+  "type": "module",
+  "main": "dist/plugin.js",
+  "types": "dist/plugin.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/plugin.js",
+      "types": "./dist/plugin.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "migrations"
+  ],
+  "scripts": {
+    "build": "bun build ./src/plugin.ts --outdir ./dist --target bun --minify",
+    "dev": "bun --watch ./src/plugin.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "db:migrate": "bun run src/migrate.ts"
+  },
+  "keywords": [
+    "opencode",
+    "memory",
+    "ai",
+    "coding-agent",
+    "persistent-context"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@opencode-ai/plugin": "latest",
+    "openai": "^4.85.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  },
+  "peerDependencies": {
+    "bun": ">=1.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tu-usuario/opencode-memory"
+  },
+  "bugs": {
+    "url": "https://github.com/tu-usuario/opencode-memory/issues"
+  },
+  "homepage": "https://github.com/tu-usuario/opencode-memory#readme"
+}
