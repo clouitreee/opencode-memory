@@ -326,7 +326,3 @@ The plugin automatically redacts:
 ## License
 
 MIT
-
-## Credits
-
-Inspired by [claude-mem](https://github.com/thedotmack/claude-mem) by @thedotmack.
