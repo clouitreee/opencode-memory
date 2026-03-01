@@ -91,8 +91,8 @@ opencode run "mem-search stats"
 npm install -g opencode-memory
 
 # Generate AGENTS files
-ocmem init
-ocmem generate --codex
+longmem init
+longmem generate --codex
 
 # AGENTS.override.md is auto-generated and gitignored
 # Codex will discover and use both files
@@ -105,7 +105,7 @@ ocmem generate --codex
 npm install -g opencode-memory
 
 # Generate config
-ocmem generate --gemini
+longmem generate --gemini
 
 # Add to ~/.gemini/settings.json:
 # { "context": { "fileName": "AGENTS.md" } }
@@ -122,7 +122,7 @@ gemini
 npm install -g opencode-memory
 
 # Generate wrapper
-ocmem generate --claude
+longmem generate --claude
 
 # Use wrapper instead of claude directly
 ./claude-mem "your prompt here"
@@ -132,25 +132,25 @@ ocmem generate --claude
 
 ```bash
 # Initialize database
-ocmem init
+longmem init
 
 # Search observations
-ocmem search "auth bug"
-ocmem search "database" --project=myapp
+longmem search "auth bug"
+longmem search "database" --project=myapp
 
 # Pack context for different CLIs
-ocmem pack --format=opencode --project=myapp
-ocmem pack --format=codex --project=myapp
-ocmem pack --format=claude --project=myapp
-ocmem pack --format=gemini --project=myapp
+longmem pack --format=opencode --project=myapp
+longmem pack --format=codex --project=myapp
+longmem pack --format=claude --project=myapp
+longmem pack --format=gemini --project=myapp
 
 # Show stats
-ocmem stats
+longmem stats
 
 # Generate config files
-ocmem generate --codex    # AGENTS.md + AGENTS.override.md
-ocmem generate --gemini   # .gemini/commands/mem.toml
-ocmem generate --claude   # claude-mem wrapper
+longmem generate --codex    # AGENTS.md + AGENTS.override.md
+longmem generate --gemini   # .gemini/commands/mem.toml
+longmem generate --claude   # claude-mem wrapper
 ```
 
 ## Slash Commands

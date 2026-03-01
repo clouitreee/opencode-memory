@@ -6,7 +6,7 @@
   "main": "dist/plugin.js",
   "types": "dist/plugin.d.ts",
   "bin": {
-    "ocmem": "./dist/cli.js"
+    "longmem": "./dist/cli.js"
   },
   "exports": {
     ".": {

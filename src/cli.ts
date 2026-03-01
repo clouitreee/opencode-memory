@@ -16,7 +16,7 @@ function getDataDir(): string {
 const HELP = `opencode-memory CLI
 
 Usage:
-  ocmem <command> [options]
+  longmem <command> [options]
 
 Commands:
   init                Initialize memory database
@@ -36,10 +36,10 @@ Generate Options:
   --claude            Generate Claude Code wrapper
 
 Examples:
-  ocmem init
-  ocmem search "auth bug"
-  ocmem pack --format=codex --project=myapp
-  ocmem generate --codex
+  longmem init
+  longmem search "auth bug"
+  longmem pack --format=codex --project=myapp
+  longmem generate --codex
 `;
 
 function parseArgs(args: string[]): { command: string; options: Record<string, string>; positional: string[] } {
@@ -101,7 +101,7 @@ function cmdInit() {
 
 function cmdSearch(query: string, options: Record<string, string>) {
   if (!query) {
-    console.error("Usage: ocmem search <query>");
+    console.error("Usage: longmem search <query>");
     process.exit(1);
   }
   
@@ -207,9 +207,9 @@ This project uses opencode-memory for persistent context across sessions.
 
 ### Quick Commands
 
-- \`ocmem stats\` - View memory statistics
-- \`ocmem search <query>\` - Search observations
-- \`ocmem pack --format=codex\` - Generate context
+- \`longmem stats\` - View memory statistics
+- \`longmem search <query>\` - Search observations
+- \`longmem pack --format=codex\` - Generate context
 
 ### Memory Files
 
@@ -266,7 +266,7 @@ Create \`.opencode-memory-disable\` in project root.
     const toml = `# .gemini/commands/mem.toml
 [commands.mem]
 description = "Show memory context"
-command = "ocmem pack --format=gemini --project=$(basename $PWD)"
+command = "longmem pack --format=gemini --project=$(basename $PWD)"
 `;
     writeFileSync(join(geminiDir, "mem.toml"), toml);
     console.log("Generated: .gemini/commands/mem.toml");
@@ -279,7 +279,7 @@ command = "ocmem pack --format=gemini --project=$(basename $PWD)"
 # claude-mem wrapper - injects memory context into Claude Code
 
 PROJECT=$(basename "$PWD")
-CONTEXT=$(ocmem pack --format=claude --project="$PROJECT" 2>/dev/null)
+CONTEXT=$(longmem pack --format=claude --project="$PROJECT" 2>/dev/null)
 
 if [ -n "$CONTEXT" ]; then
   claude --append-system-prompt "$CONTEXT" "$@"
