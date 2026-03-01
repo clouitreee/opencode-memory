@@ -60,6 +60,99 @@ bash install.sh
 | **Secrets Detection** | Automatic redaction of API keys |
 | **Memory Budget** | Garbage collection for old data |
 
+## Multi-CLI Support
+
+| CLI | Integration | Method |
+|-----|-------------|--------|
+| **OpenCode** | Native | Plugin + `/mem-*` commands |
+| **Codex CLI** | Native | AGENTS.md + AGENTS.override.md |
+| **Gemini CLI** | Context file | .gemini/commands/mem.toml |
+| **Claude Code** | Wrapper | claude-mem script |
+
+## Quickstart by CLI
+
+### OpenCode (Native)
+
+```bash
+# Install
+npm install -g opencode-memory
+
+# Or use the installer
+curl -fsSL https://i.longmem.workers.dev/install | bash
+
+# Verify
+opencode run "mem-search stats"
+```
+
+### Codex CLI
+
+```bash
+# Install
+npm install -g opencode-memory
+
+# Generate AGENTS files
+ocmem init
+ocmem generate --codex
+
+# AGENTS.override.md is auto-generated and gitignored
+# Codex will discover and use both files
+```
+
+### Gemini CLI
+
+```bash
+# Install
+npm install -g opencode-memory
+
+# Generate config
+ocmem generate --gemini
+
+# Add to ~/.gemini/settings.json:
+# { "context": { "fileName": "AGENTS.md" } }
+
+# Use /mem command
+gemini
+> /mem
+```
+
+### Claude Code
+
+```bash
+# Install
+npm install -g opencode-memory
+
+# Generate wrapper
+ocmem generate --claude
+
+# Use wrapper instead of claude directly
+./claude-mem "your prompt here"
+```
+
+## CLI Commands
+
+```bash
+# Initialize database
+ocmem init
+
+# Search observations
+ocmem search "auth bug"
+ocmem search "database" --project=myapp
+
+# Pack context for different CLIs
+ocmem pack --format=opencode --project=myapp
+ocmem pack --format=codex --project=myapp
+ocmem pack --format=claude --project=myapp
+ocmem pack --format=gemini --project=myapp
+
+# Show stats
+ocmem stats
+
+# Generate config files
+ocmem generate --codex    # AGENTS.md + AGENTS.override.md
+ocmem generate --gemini   # .gemini/commands/mem.toml
+ocmem generate --claude   # claude-mem wrapper
+```
+
 ## Slash Commands
 
 After installation, these commands are available in OpenCode:

@@ -1,10 +1,13 @@
 {
   "name": "opencode-memory",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Persistent memory system for OpenCode - cross-session context with AI compression",
   "type": "module",
   "main": "dist/plugin.js",
   "types": "dist/plugin.d.ts",
+  "bin": {
+    "ocmem": "./dist/cli.js"
+  },
   "exports": {
     ".": {
       "import": "./dist/plugin.js",
@@ -16,7 +19,7 @@
     "migrations"
   ],
   "scripts": {
-    "build": "bun build ./src/plugin.ts --outdir ./dist --target bun --external @opencode-ai/plugin --external @opencode-ai/sdk --external zod",
+    "build": "bun build ./src/plugin.ts --outdir ./dist --target bun --external @opencode-ai/plugin --external @opencode-ai/sdk --external zod && bun build ./src/cli.ts --outdir ./dist --target bun",
     "dev": "bun --watch ./src/plugin.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
@@ -44,10 +47,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/tu-usuario/opencode-memory"
+    "url": "https://github.com/clouitreee/opencode-memory"
   },
   "bugs": {
-    "url": "https://github.com/tu-usuario/opencode-memory/issues"
+    "url": "https://github.com/clouitreee/opencode-memory/issues"
   },
-  "homepage": "https://github.com/tu-usuario/opencode-memory#readme"
+  "homepage": "https://github.com/clouitreee/opencode-memory#readme"
 }
