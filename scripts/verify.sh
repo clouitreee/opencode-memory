@@ -82,12 +82,18 @@ check_plugin_files() {
 check_config() {
     log_info "Checking OpenCode config..."
     
-    local config_file="$HOME/.config/opencode/config.json"
+    local config_file=""
     
-    if [ ! -f "$config_file" ]; then
-        log_warn "Config file not found: $config_file"
+    if [ -f "$HOME/.config/opencode/opencode.jsonc" ]; then
+        config_file="$HOME/.config/opencode/opencode.jsonc"
+    elif [ -f "$HOME/.config/opencode/opencode.json" ]; then
+        config_file="$HOME/.config/opencode/opencode.json"
+    else
+        log_warn "Config file not found (opencode.jsonc or opencode.json)"
         return 0
     fi
+    
+    log_ok "Config file: $config_file"
     
     if grep -q "opencode-memory" "$config_file"; then
         log_ok "Plugin registered in config"
@@ -95,7 +101,6 @@ check_config() {
         log_warn "Plugin not in config (may not be loaded)"
     fi
     
-    # Check for API key in config
     if grep -q "apiKey\|api_key" "$config_file"; then
         log_ok "API key found in config (will be used automatically)"
     else

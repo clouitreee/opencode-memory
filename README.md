@@ -82,7 +82,7 @@ If you want to override:
 # Option 1: Environment variable
 export OPENROUTER_API_KEY="your-key"
 
-# Option 2: OpenCode config (~/.config/opencode/config.json)
+# Option 2: OpenCode config (~/.config/opencode/opencode.jsonc)
 {
   "provider": {
     "openrouter": {
@@ -164,7 +164,7 @@ My API key is <private>sk-xxxxx</private> but I need help with...
 ls ~/.local/share/opencode/plugins/opencode-memory/dist/plugin.js
 
 # Check config
-cat ~/.config/opencode/config.json | grep opencode-memory
+cat ~/.config/opencode/opencode.jsonc | grep opencode-memory
 
 # Re-run install
 curl -fsSL https://i.longmem.workers.dev/install | bash
@@ -309,19 +309,6 @@ The plugin automatically redacts:
 - **Version pinning**: Use `?ref=v0.1.0` to pin to specific version
 - **npm package**: Will be signed when published
 - **Dependencies**: Minimal (only `openai` SDK + `@opencode-ai/plugin`)
-
-## Comparison vs claude-mem
-
-| Feature | opencode-memory | claude-mem |
-|---------|----------------|------------|
-| Platform | OpenCode | Claude Code |
-| API Key Config | Automatic | Manual env var |
-| Compression | Async queue | Sync/blocking |
-| Temporal decay | ✅ | ❌ |
-| User-level memory | ✅ | ❌ |
-| Secrets detection | ✅ | ❌ |
-| Memory budget | ✅ | ❌ |
-| Shortlink installer | ✅ | ❌ |
 
 ## License
 

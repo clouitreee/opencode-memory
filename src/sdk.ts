@@ -85,17 +85,19 @@ Only extract memories that are truly user-level (not project-specific).`;
 
 function getOpenCodeConfig(): OpenCodeConfig | null {
   const configPaths = [
-    join(homedir(), ".config", "opencode", "config.json"),
-    join(homedir(), ".opencode", "config.json"),
+    join(homedir(), ".config", "opencode", "opencode.jsonc"),
+    join(homedir(), ".config", "opencode", "opencode.json"),
   ];
   
   for (const configPath of configPaths) {
     if (existsSync(configPath)) {
       try {
-        const content = readFileSync(configPath, "utf-8");
+        let content = readFileSync(configPath, "utf-8");
+        if (configPath.endsWith(".jsonc")) {
+          content = content.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+        }
         return JSON.parse(content);
       } catch {
-        // Ignore parse errors
       }
     }
   }
@@ -199,7 +201,7 @@ export class MemorySDK {
     if (!apiKey) {
       console.warn(
         `[opencode-memory] No API key found for ${this.provider}. ` +
-        `Set ${API_KEY_ENV_VARS[this.provider]} env var or add apiKey to ~/.config/opencode/config.json. ` +
+        `Set ${API_KEY_ENV_VARS[this.provider]} env var or add apiKey to ~/.config/opencode/opencode.jsonc. ` +
         `Compression will be disabled.`
       );
     }
