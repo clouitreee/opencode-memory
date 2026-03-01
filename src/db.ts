@@ -34,7 +34,8 @@ export function runMigrations(): void {
   
   const migrations = [
     { name: "001_init.sql", embedded: MIGRATION_EMBEDDED },
-    { name: "002_fixes_and_features.sql", embedded: MIGRATION_002_EMBEDDED }
+    { name: "002_fixes_and_features.sql", embedded: MIGRATION_002_EMBEDDED },
+    { name: "003_redaction_meta.sql", embedded: MIGRATION_003_EMBEDDED }
   ];
   
   for (const migration of migrations) {
@@ -256,19 +257,21 @@ export function saveObservation(
   toolName: string,
   toolInput: string,
   toolOutput: string,
-  promptNumber?: number
+  promptNumber?: number,
+  redactionMeta?: string
 ): number {
   const database = getDB();
   const result = database.prepare(`
-    INSERT INTO observations (session_id, prompt_number, tool_name, tool_input, tool_output)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO observations (session_id, prompt_number, tool_name, tool_input, tool_output, redaction_meta)
+    VALUES (?, ?, ?, ?, ?, ?)
     RETURNING id
   `).get(
     sessionId,
     promptNumber ?? null,
     toolName,
     toolInput,
-    toolOutput
+    toolOutput,
+    redactionMeta ?? null
   ) as { id: number };
   
   return result.id;
@@ -811,4 +814,20 @@ CREATE TABLE IF NOT EXISTS compression_queue (
 
 CREATE INDEX IF NOT EXISTS idx_queue_status ON compression_queue(status);
 CREATE INDEX IF NOT EXISTS idx_queue_created ON compression_queue(created_at);
+`;
+
+const MIGRATION_003_EMBEDDED = `
+ALTER TABLE observations ADD COLUMN redaction_meta TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_obs_redaction ON observations(redaction_meta) WHERE redaction_meta IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS telemetry (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  metric_type TEXT NOT NULL,
+  metric_data TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_telemetry_type ON telemetry(metric_type);
+CREATE INDEX IF NOT EXISTS idx_telemetry_created ON telemetry(created_at DESC);
 `;

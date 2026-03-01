@@ -25,14 +25,16 @@ import {
 } from "./db";
 import { getSDK } from "./sdk";
 import { smartContextInjection, formatContextForInjection, searchUserObservations } from "./search";
-import { stripAllMemoryTags, isFullyPrivate, truncateInput, truncateOutput } from "./privacy";
+import { stripAllMemoryTags, isFullyPrivate, truncateInput, truncateOutput, redactObject, safeStringify, safeParse, generateDryRunReport, getRedactionConfig } from "./privacy";
 import { 
   redactSecrets, 
   getSecurityConfig, 
   logRedaction,
+  detectSecretInValue,
   type ToolContext 
 } from "./secrets";
 import { memSearchTool } from "./tools/mem-search";
+import { recordRedaction, formatTelemetryReport } from "./metrics";
 
 const SKIP_TOOLS = new Set([
   "AskQuestion",
@@ -354,22 +356,83 @@ export const OpenCodeMemoryPlugin: Plugin = async (input: PluginInput): Promise<
         toolInput: input.args || {}
       };
       
-      const inputStr = truncateInput(stripAllMemoryTags(JSON.stringify(input.args || {})));
-      const outputStr = truncateOutput(stripAllMemoryTags(
-        typeof output.output === "string" ? output.output : JSON.stringify(output.output)
-      ));
+      const privacyConfig = getRedactionConfig();
       
-      let finalInput = inputStr;
-      let finalOutput = outputStr;
-      let redactedCount = 0;
+      let finalInputObj = input.args || {};
+      let finalOutputObj = output.output;
+      let redactionMeta: string | undefined;
       
-      if (securityConfig.enabled) {
+      if (securityConfig.enabled && privacyConfig.enabled) {
+        const detector = (v: string, p: string) => detectSecretInValue(v, p);
+        
+        const inputResult = redactObject(finalInputObj, detector, "input");
+        const outputResult = redactObject(finalOutputObj, detector, "output");
+        
+        finalInputObj = inputResult.redacted as Record<string, unknown>;
+        finalOutputObj = outputResult.redacted;
+        
+        const allRedactions = [...inputResult.redactions, ...outputResult.redactions];
+        
+        if (allRedactions.length > 0) {
+          const fields = [...new Set(allRedactions.map(r => r.path))];
+          const patterns = [...new Set(allRedactions.map(r => r.patternId))];
+          const ratio = (inputResult.redactionRatio + outputResult.redactionRatio) / 2;
+          
+          recordRedaction(
+            allRedactions.length,
+            allRedactions.filter(r => r.kind === "full_redact").length,
+            allRedactions.filter(r => r.kind === "partial_redact").length,
+            ratio,
+            fields,
+            patterns
+          );
+          
+          redactionMeta = JSON.stringify({
+            count: allRedactions.length,
+            ratio: ratio,
+            fields: fields.slice(0, 10),
+            kinds: {
+              full: allRedactions.filter(r => r.kind === "full_redact").length,
+              partial: allRedactions.filter(r => r.kind === "partial_redact").length
+            }
+          });
+          
+          await client.app.log({
+            body: {
+              service: "opencode-memory",
+              level: "warn",
+              message: `Redacted ${allRedactions.length} secrets from ${input.tool} (ratio: ${(ratio * 100).toFixed(1)}%)`,
+            }
+          });
+          
+          if (privacyConfig.dryRun) {
+            const report = generateDryRunReport({
+              redacted: { input: finalInputObj, output: finalOutputObj },
+              redactions: allRedactions,
+              redactionRatio: ratio,
+              originalSize: inputResult.originalSize + outputResult.originalSize,
+              redactedSize: inputResult.redactedSize + outputResult.redactedSize
+            });
+            console.log(`[opencode-memory] DRY-RUN Report for ${input.tool}:`, JSON.stringify(report, null, 2));
+          }
+          
+          if (ratio > privacyConfig.maxRatio) {
+            console.warn(`[opencode-memory] HIGH REDACTION WARNING: ${(ratio * 100).toFixed(1)}% of content redacted`);
+          }
+        }
+      } else if (securityConfig.enabled) {
+        const inputStr = truncateInput(stripAllMemoryTags(JSON.stringify(input.args || {})));
+        const outputStr = truncateOutput(stripAllMemoryTags(
+          typeof output.output === "string" ? output.output : JSON.stringify(output.output)
+        ));
+        
         const redactedInput = redactSecrets(inputStr, securityContext, securityConfig);
         const redactedOutput = redactSecrets(outputStr, securityContext, securityConfig);
         
-        finalInput = redactedInput.text;
-        finalOutput = redactedOutput.text;
-        redactedCount = redactedInput.redactedCount + redactedOutput.redactedCount;
+        finalInputObj = safeParse(redactedInput.text) || input.args || {};
+        finalOutputObj = redactedOutput.text;
+        
+        const redactedCount = redactedInput.redactedCount + redactedOutput.redactedCount;
         
         if (redactedCount > 0) {
           await client.app.log({
@@ -379,22 +442,28 @@ export const OpenCodeMemoryPlugin: Plugin = async (input: PluginInput): Promise<
               message: `Redacted ${redactedCount} secrets from ${input.tool}`,
             }
           });
-          
-          console.warn(`[opencode-memory] Security: Redacted ${redactedCount} potential secrets from ${input.tool} tool`);
         }
       }
       
-      if (isFullyPrivate(finalOutput)) return;
+      const finalInputStr = truncateInput(stripAllMemoryTags(
+        typeof finalInputObj === "string" ? finalInputObj : safeStringify(finalInputObj)
+      ));
+      const finalOutputStr = truncateOutput(stripAllMemoryTags(
+        typeof finalOutputObj === "string" ? finalOutputObj : safeStringify(finalOutputObj)
+      ));
+      
+      if (isFullyPrivate(finalOutputStr)) return;
       
       const obsId = saveObservation(
         session.dbId,
         input.tool,
-        finalInput,
-        finalOutput,
-        session.promptNumber
+        finalInputStr,
+        finalOutputStr,
+        session.promptNumber,
+        redactionMeta
       );
       
-      session.observations.push(`${input.tool}: ${finalInput.slice(0, 200)}`);
+      session.observations.push(`${input.tool}: ${finalInputStr.slice(0, 200)}`);
       
       if (compressionEnabled) {
         queueCompression(obsId);
@@ -463,14 +532,54 @@ export {
   smartContextInjection,
   formatContextForInjection 
 } from "./search";
-export { stripAllMemoryTags, stripPrivateTags, isFullyPrivate, truncateInput, truncateOutput } from "./privacy";
+export { 
+  stripAllMemoryTags, 
+  stripPrivateTags, 
+  isFullyPrivate, 
+  truncateInput, 
+  truncateOutput,
+  redactObject,
+  redactValue,
+  redactText,
+  redactToolData,
+  generateDryRunReport,
+  safeStringify,
+  safeParse,
+  safeParseOrFallback,
+  isStringifiedJson,
+  setRedactionConfig,
+  getRedactionConfig,
+  type RedactionMeta,
+  type RedactionResult as PrivacyRedactionResult,
+  type DryRunReport,
+  type RedactionConfig
+} from "./privacy";
 export { 
   redactSecrets, 
   getSecurityConfig, 
   setSecurityConfig,
   isContextSensitive,
+  detectSecretInValue,
+  scanStringForSecrets,
   type ToolContext,
   type RedactionResult,
-  type SecurityConfig 
+  type SecurityConfig,
+  type DetectionResult,
+  type SeverityKind
 } from "./secrets";
 export { memSearchTool } from "./tools/mem-search";
+export {
+  recordRedaction,
+  getRedactionMetrics,
+  getQueueMetrics,
+  getTelemetrySnapshot,
+  getAverageRedactionRatio,
+  getTopRedactedFields,
+  getTopPatterns,
+  formatTelemetryReport,
+  resetMetrics,
+  type RedactionMetrics,
+  type QueueMetrics,
+  type TelemetrySnapshot
+} from "./metrics";
+export { ProcessingQueue, createCompressionQueue, type QueueJob, type QueueConfig } from "./queue";

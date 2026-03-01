@@ -627,3 +627,133 @@ export function auditLog(
     `[opencode-memory] Security audit: ${auditEntry.tool} - ${auditEntry.redactedCount} secrets redacted`
   );
 }
+
+export type SeverityKind = "full_redact" | "partial_redact" | "none";
+
+export interface DetectionResult {
+  kind: SeverityKind;
+  patternId: string;
+  prefix4?: string;
+}
+
+const FULL_REDACT_PATTERNS: Array<{ id: string; pattern: RegExp }> = [
+  { id: "aws_access_key", pattern: /AKIA[A-Z0-9]{16}/ },
+  { id: "github_token", pattern: /(?:ghp_|gho_|github_pat_)[A-Za-z0-9]{22,50}/ },
+  { id: "npm_token", pattern: /npm_[A-Za-z0-9]{36}/ },
+  { id: "jwt_token", pattern: /eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*/ },
+  { id: "private_key_pem", pattern: /-----BEGIN\s+(?:RSA\s+|OPENSSH\s+|EC\s+)?PRIVATE\s+KEY-----/ },
+  { id: "openai_key", pattern: /sk-(?:proj-)?[A-Za-z0-9]{20,}/ },
+  { id: "anthropic_key", pattern: /sk-ant-[A-Za-z0-9]{20,}/ },
+  { id: "google_api_key", pattern: /AIza[A-Za-z0-9_-]{35}/ },
+  { id: "stripe_key", pattern: /sk_(?:live|test)_[A-Za-z0-9]{24,}/ },
+  { id: "slack_token", pattern: /xox[abp]-[A-Za-z0-9]{10,24}/ },
+  { id: "vault_token", pattern: /(?:s\.)?[vhvs]\.[a-zA-Z0-9]{24,}/ },
+  { id: "sendgrid_key", pattern: /SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}/ },
+  { id: "bearer_token", pattern: /Bearer\s+[A-Za-z0-9\-._~+/]{20,}/i },
+  { id: "url_with_auth", pattern: /(?:https?|postgres|mongodb|redis|mysql|postgresql):\/\/[^:\s"']+:[^:@\s"']+@/i },
+  { id: "ssh_key_path", pattern: /~\/\.ssh\/id_[a-z0-9]+/i },
+  { id: "env_file_path", pattern: /\.env(?:\.|$)/i },
+];
+
+const PARTIAL_REDACT_PATTERNS: Array<{ id: string; pattern: RegExp }> = [
+  { id: "home_dir", pattern: /^~\/|^\/home\/[^/]+\// },
+  { id: "ssh_dir", pattern: /\/\.ssh\// },
+  { id: "keychain_path", pattern: /keychain|\.keychain/i },
+  { id: "aws_config", pattern: /\/\.aws\/(credentials|config)/i },
+  { id: "gcloud_config", pattern: /\/\.config\/gcloud|\/\.gcloud\//i },
+  { id: "docker_config", pattern: /\/\.docker\/config\.json/i },
+  { id: "kubeconfig", pattern: /kubeconfig|\.kube\//i },
+  { id: "env_var_assignment", pattern: /[A-Z_]+(?:KEY|SECRET|TOKEN|PASSWORD|API_KEY)\s*=/ },
+  { id: "sensitive_file", pattern: /\.(pem|key|crt|cer|pfx|p12)$/i },
+];
+
+export function detectSecretInValue(value: string, path: string): DetectionResult {
+  if (!value || typeof value !== "string") {
+    return { kind: "none", patternId: "" };
+  }
+  
+  if (value.length < 8) {
+    return { kind: "none", patternId: "" };
+  }
+  
+  for (const { id, pattern } of FULL_REDACT_PATTERNS) {
+    const regex = new RegExp(pattern.source, pattern.flags || "");
+    if (regex.test(value)) {
+      const prefix4 = value.length > 4 ? value.slice(0, 4) : value;
+      return { kind: "full_redact", patternId: id, prefix4 };
+    }
+  }
+  
+  for (const { id, pattern } of PARTIAL_REDACT_PATTERNS) {
+    const regex = new RegExp(pattern.source, pattern.flags || "");
+    if (regex.test(value)) {
+      const prefix4 = value.length > 4 ? value.slice(0, 4) : value;
+      return { kind: "partial_redact", patternId: id, prefix4 };
+    }
+  }
+  
+  const SECRET_KEY_NAMES = /^(?:password|secret|token|api[_-]?key|private[_-]?key|access[_-]?key|auth[_-]?token|bearer|credential|apikey)$/i;
+  const pathParts = path.split(/[.\[\]]/).filter(Boolean);
+  for (const part of pathParts) {
+    if (SECRET_KEY_NAMES.test(part)) {
+      const prefix4 = value.length > 4 ? value.slice(0, 4) : value;
+      return { kind: "full_redact", patternId: "sensitive_key_name", prefix4 };
+    }
+  }
+  
+  if (value.length >= 16) {
+    const entropy = shannonEntropy(value);
+    if (entropy >= 4.0) {
+      const hasUpper = /[A-Z]/.test(value);
+      const hasLower = /[a-z]/.test(value);
+      const hasDigit = /[0-9]/.test(value);
+      const hasSpecial = /[-_=+\/]/.test(value);
+      const variety = [hasUpper, hasLower, hasDigit, hasSpecial].filter(Boolean).length;
+      
+      if (variety >= 2) {
+        const prefix4 = value.slice(0, 4);
+        return { kind: "full_redact", patternId: "high_entropy", prefix4 };
+      }
+    }
+  }
+  
+  return { kind: "none", patternId: "" };
+}
+
+export function createDetector(): (value: string, path: string) => DetectionResult {
+  return detectSecretInValue;
+}
+
+export function scanStringForSecrets(text: string): Array<{ kind: SeverityKind; patternId: string; match: string; position: number }> {
+  const results: Array<{ kind: SeverityKind; patternId: string; match: string; position: number }> = [];
+  
+  if (!text || typeof text !== "string") return results;
+  
+  for (const { id, pattern } of FULL_REDACT_PATTERNS) {
+    const regex = new RegExp(pattern.source, "g");
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+      results.push({
+        kind: "full_redact",
+        patternId: id,
+        match: match[0].length > 4 ? match[0].slice(0, 4) + "..." : match[0],
+        position: match.index
+      });
+    }
+  }
+  
+  for (const { id, pattern } of PARTIAL_REDACT_PATTERNS) {
+    const regex = new RegExp(pattern.source, "g");
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+      results.push({
+        kind: "partial_redact",
+        patternId: id,
+        match: match[0].length > 4 ? match[0].slice(0, 4) + "..." : match[0],
+        position: match.index
+      });
+    }
+  }
+  
+  return results;
+}
