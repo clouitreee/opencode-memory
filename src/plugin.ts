@@ -359,7 +359,7 @@ export const OpenCodeMemoryPlugin: Plugin = async (input: PluginInput): Promise<
       const privacyConfig = getRedactionConfig();
       
       let finalInputObj = input.args || {};
-      let finalOutputObj = output.output;
+      let finalOutputObj: unknown = output.output;
       let redactionMeta: string | undefined;
       
       if (securityConfig.enabled && privacyConfig.enabled) {

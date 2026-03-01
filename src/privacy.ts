@@ -354,7 +354,7 @@ export function redactText(
     }
   }
   
-  const result = redactValue(cleaned, "text", detector);
+  const result = redactValue(cleaned, "text", (v) => detector(v, "text"));
   return {
     text: result.redacted,
     redactions: result.redactions,
@@ -392,7 +392,13 @@ export function redactToolData(
     ? (allRedactions.reduce((s, r) => s + r.length, 0) / totalOriginal)
     : 0;
   
-  const result = {
+  const result: {
+    input: Record<string, unknown>;
+    output: unknown;
+    redactions: RedactionMeta[];
+    ratio: number;
+    dryRunReport?: DryRunReport;
+  } = {
     input: inputResult.redacted as Record<string, unknown>,
     output: outputResult.redacted,
     redactions: allRedactions,

@@ -1,15 +1,10 @@
 #!/usr/bin/env bun
 import {
   runMigrations,
-  createSession,
-  insertObservation,
-  updateObservation,
   getStats,
   getRecentObservations
 } from "./db.js";
 import { searchObservations } from "./search.js";
-import { getSDK } from "./sdk.js";
-import { redactSecrets, truncate, stripPrivateTags } from "./privacy.js";
 import { existsSync, writeFileSync, appendFileSync, readFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
