@@ -11,11 +11,21 @@ import {
   markSessionIdle,
   markSessionCompleted,
   getRecentObservations,
-  getSetting
+  getSetting,
+  getMemoryConfig,
+  queueCompression,
+  getPendingCompressionJobs,
+  updateCompressionJob,
+  upsertConcepts,
+  linkObservationConcepts,
+  saveUserObservation,
+  getUserObservations,
+  runGarbageCollection,
+  getStats
 } from "./db";
 import { getSDK } from "./sdk";
-import { searchObservations, formatContextForInjection } from "./search";
-import { stripAllMemoryTags, isFullyPrivate } from "./privacy";
+import { smartContextInjection, formatContextForInjection, searchUserObservations } from "./search";
+import { stripAllMemoryTags, isFullyPrivate, truncateInput, truncateOutput } from "./privacy";
 import { memSearchTool } from "./tools/mem-search";
 
 const SKIP_TOOLS = new Set([
@@ -26,11 +36,122 @@ const SKIP_TOOLS = new Set([
 ]);
 
 let initialized = false;
+let compressionWorkerRunning = false;
+let lastGcRun = 0;
 
 function ensureInitialized(): void {
   if (!initialized) {
     runMigrations();
     initialized = true;
+  }
+}
+
+function getSessionIdFromEvent(event: unknown): string | null {
+  if (!event || typeof event !== "object") return null;
+  
+  const e = event as Record<string, unknown>;
+  const props = e.properties as Record<string, unknown> | undefined;
+  
+  // Try different paths
+  if (props?.sessionID && typeof props.sessionID === "string") {
+    return props.sessionID;
+  }
+  if (props?.info && typeof props.info === "object") {
+    const info = props.info as Record<string, unknown>;
+    if (info.id && typeof info.id === "string") {
+      return info.id;
+    }
+  }
+  if (props?.id && typeof props.id === "string") {
+    return props.id;
+  }
+  
+  return null;
+}
+
+async function processCompressionQueue(): Promise<void> {
+  if (compressionWorkerRunning) return;
+  compressionWorkerRunning = true;
+  
+  try {
+    const jobs = getPendingCompressionJobs(5);
+    const sdk = getSDK();
+    const db = getDB();
+    
+    for (const job of jobs) {
+      try {
+        updateCompressionJob(job.id, "processing");
+        
+        const obs = db.prepare(`
+          SELECT * FROM observations WHERE id = ?
+        `).get(job.observation_id) as {
+          id: number;
+          tool_name: string;
+          tool_input: string;
+          tool_output: string;
+        } | undefined;
+        
+        if (!obs) {
+          updateCompressionJob(job.id, "failed", "Observation not found");
+          continue;
+        }
+        
+        const compressed = await sdk.compressObservation(
+          obs.tool_name,
+          JSON.parse(obs.tool_input || "{}"),
+          obs.tool_output
+        );
+        
+        updateObservationSummary(
+          obs.id,
+          compressed.summary,
+          compressed.type,
+          compressed.files,
+          compressed.concepts
+        );
+        
+        if (compressed.concepts.length > 0) {
+          upsertConcepts(compressed.concepts);
+          linkObservationConcepts(obs.id, compressed.concepts);
+        }
+        
+        updateCompressionJob(job.id, "completed");
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        updateCompressionJob(job.id, "failed", errorMsg);
+      }
+    }
+  } finally {
+    compressionWorkerRunning = false;
+  }
+}
+
+async function maybeRunGarbageCollection(): Promise<void> {
+  const config = getMemoryConfig();
+  const now = Date.now();
+  const intervalMs = config.gc_interval_hours * 60 * 60 * 1000;
+  
+  if (config.gc_enabled && now - lastGcRun > intervalMs) {
+    lastGcRun = now;
+    const stats = runGarbageCollection();
+    if (stats.observationsDeleted > 0 || stats.sessionsDeleted > 0) {
+      console.log("[opencode-memory] GC:", stats);
+    }
+  }
+}
+
+async function extractUserLevelMemory(observations: string[]): Promise<void> {
+  if (observations.length === 0) return;
+  
+  try {
+    const sdk = getSDK();
+    const userMemory = await sdk.extractUserMemory(observations);
+    
+    if (userMemory) {
+      saveUserObservation(userMemory.type, userMemory.content, userMemory.metadata);
+    }
+  } catch (error) {
+    console.error("[opencode-memory] User memory extraction failed:", error);
   }
 }
 
@@ -44,7 +165,7 @@ export const OpenCodeMemoryPlugin: Plugin = async (input: PluginInput): Promise<
   const compressionEnabled = getSetting("compression_enabled") !== "false";
   const maxObservations = parseInt(getSetting("max_observations_context") || "50", 10);
   
-  const activeSessions = new Map<string, { dbId: number; promptNumber: number }>();
+  const activeSessions = new Map<string, { dbId: number; promptNumber: number; observations: string[] }>();
   
   await client.app.log({
     body: {
@@ -58,81 +179,87 @@ export const OpenCodeMemoryPlugin: Plugin = async (input: PluginInput): Promise<
     event: async ({ event }) => {
       switch (event.type) {
         case "session.created": {
-          const sessionId = event.properties.info.id;
+          const sessionId = getSessionIdFromEvent(event);
+          if (!sessionId) {
+            console.error("[opencode-memory] Could not extract session ID from session.created event");
+            break;
+          }
+          
           ensureInitialized();
           
           const dbId = createSession(sessionId, projectName, directory);
-          activeSessions.set(sessionId, { dbId, promptNumber: 0 });
+          activeSessions.set(sessionId, { dbId, promptNumber: 0, observations: [] });
           
-          const recentObs = getRecentObservations(projectName, maxObservations);
-          const context = formatContextForInjection(recentObs);
+          const recentObs = smartContextInjection(projectName, undefined, maxObservations);
+          const userObs = getUserObservations(5);
+          
+          let context = formatContextForInjection(recentObs);
+          
+          if (userObs.length > 0) {
+            context += "\n## User Preferences\n\n";
+            for (const uo of userObs) {
+              context += `- [${uo.observation_type}] ${uo.content}\n`;
+            }
+          }
           
           if (context) {
             await client.app.log({
               body: {
                 service: "opencode-memory",
                 level: "info",
-                message: `Injected ${recentObs.length} observations for new session`,
+                message: `Injected ${recentObs.length} observations + ${userObs.length} user memories`,
               }
             });
           }
+          
+          maybeRunGarbageCollection();
           break;
         }
         
         case "session.idle": {
-          const sessionId = event.properties.sessionID;
+          const sessionId = getSessionIdFromEvent(event);
+          if (!sessionId) break;
+          
           const session = activeSessions.get(sessionId);
           
           if (session) {
             markSessionIdle(session.dbId);
             
-            if (compressionEnabled) {
-              const observations = db.prepare(`
-                SELECT * FROM observations 
-                WHERE session_id = $sessionId AND compressed_summary IS NULL
-                ORDER BY created_at DESC
-                LIMIT 20
-              `).all({ sessionId: session.dbId }) as Array<{
-                id: number;
-                tool_name: string;
-                tool_input: string;
-                tool_output: string;
-              }>;
+            if (compressionEnabled && session.observations.length > 0) {
+              const prompts = db.prepare(`
+                SELECT prompt FROM user_prompts 
+                WHERE session_id = $sessionId 
+                ORDER BY prompt_number
+              `).all({ sessionId: session.dbId }) as Array<{ prompt: string }>;
               
-              if (observations.length > 0) {
-                const prompts = db.prepare(`
-                  SELECT prompt FROM user_prompts 
-                  WHERE session_id = $sessionId 
-                  ORDER BY prompt_number
-                `).all({ sessionId: session.dbId }) as Array<{ prompt: string }>;
-                
-                const obsStrings = observations.map(o => 
-                  `${o.tool_name}: ${o.tool_input?.slice(0, 200)}`
-                );
-                
-                const sdk = getSDK();
-                const summary = await sdk.summarizeSession(
-                  prompts.map(p => p.prompt),
-                  obsStrings
-                );
-                
-                saveSummary(session.dbId, summary);
-                
-                await client.app.log({
-                  body: {
-                    service: "opencode-memory",
-                    level: "info",
-                    message: "Generated session summary on idle",
-                  }
-                });
+              const sdk = getSDK();
+              const summary = await sdk.summarizeSession(
+                prompts.map(p => p.prompt),
+                session.observations
+              );
+              
+              saveSummary(session.dbId, summary);
+              
+              if (session.observations.length >= 3) {
+                extractUserLevelMemory(session.observations);
               }
+              
+              await client.app.log({
+                body: {
+                  service: "opencode-memory",
+                  level: "info",
+                  message: "Generated session summary on idle",
+                }
+              });
             }
           }
           break;
         }
         
         case "session.deleted": {
-          const sessionId = event.properties.info.id;
+          const sessionId = getSessionIdFromEvent(event);
+          if (!sessionId) break;
+          
           const session = activeSessions.get(sessionId);
           
           if (session) {
@@ -143,7 +270,9 @@ export const OpenCodeMemoryPlugin: Plugin = async (input: PluginInput): Promise<
         }
         
         case "session.compacted": {
-          const sessionId = event.properties.sessionID;
+          const sessionId = getSessionIdFromEvent(event);
+          if (!sessionId) break;
+          
           const session = activeSessions.get(sessionId);
           
           if (session) {
@@ -161,7 +290,7 @@ export const OpenCodeMemoryPlugin: Plugin = async (input: PluginInput): Promise<
       if (!session) {
         ensureInitialized();
         const dbId = createSession(sessionId, projectName, directory);
-        session = { dbId, promptNumber: 0 };
+        session = { dbId, promptNumber: 0, observations: [] };
         activeSessions.set(sessionId, session);
       }
       
@@ -187,14 +316,14 @@ export const OpenCodeMemoryPlugin: Plugin = async (input: PluginInput): Promise<
       if (!session) {
         ensureInitialized();
         const dbId = createSession(sessionId, projectName, directory);
-        session = { dbId, promptNumber: 0 };
+        session = { dbId, promptNumber: 0, observations: [] };
         activeSessions.set(sessionId, session);
       }
       
-      const cleanedInput = JSON.parse(
+      const cleanedInput = truncateInput(JSON.parse(
         stripAllMemoryTags(JSON.stringify(input.args || {}))
-      );
-      const cleanedOutput = stripAllMemoryTags(output.output);
+      ));
+      const cleanedOutput = truncateOutput(stripAllMemoryTags(output.output));
       
       if (isFullyPrivate(cleanedOutput)) return;
       
@@ -206,25 +335,12 @@ export const OpenCodeMemoryPlugin: Plugin = async (input: PluginInput): Promise<
         session.promptNumber
       );
       
+      session.observations.push(`${input.tool}: ${cleanedInput.slice(0, 200)}`);
+      
       if (compressionEnabled) {
-        try {
-          const sdk = getSDK();
-          const compressed = await sdk.compressObservation(
-            input.tool,
-            cleanedInput,
-            cleanedOutput
-          );
-          
-          updateObservationSummary(
-            obsId,
-            compressed.summary,
-            compressed.type,
-            compressed.files,
-            compressed.concepts
-          );
-        } catch (error) {
-          console.error("[opencode-memory] Compression failed:", error);
-        }
+        queueCompression(obsId);
+        
+        setTimeout(() => processCompressionQueue(), 100);
       }
     },
     
@@ -233,16 +349,21 @@ export const OpenCodeMemoryPlugin: Plugin = async (input: PluginInput): Promise<
       const session = activeSessions.get(sessionId);
       
       if (session) {
-        const recentObs = getRecentObservations(projectName, 10);
+        const recentObs = smartContextInjection(projectName, undefined, 10);
         const context = formatContextForInjection(recentObs);
         
         if (context) {
           output.context.push(context);
         }
         
+        const stats = getStats();
+        
         output.context.push(`
-## Memory Persistence Note
-This session has ${session.promptNumber} prompts recorded. Key observations have been compressed and stored for future context retrieval.
+## Memory Stats
+- Total sessions: ${stats.totalSessions}
+- Total observations: ${stats.totalObservations}
+- User-level memories: ${stats.totalUserObservations}
+- Pending compressions: ${stats.pendingCompressions}
         `);
       }
     },
@@ -267,10 +388,21 @@ export {
   markSessionIdle,
   markSessionCompleted,
   getRecentObservations,
-  getSetting
+  getSetting,
+  getMemoryConfig,
+  getStats
 } from "./db";
 
-export { getSDK, initSDK, MemorySDK } from "./sdk";
-export { searchObservations, searchSessions, searchPrompts, formatContextForInjection } from "./search";
-export { stripAllMemoryTags, stripPrivateTags, isFullyPrivate } from "./privacy";
+export { getSDK, initSDK, resetSDK, MemorySDK } from "./sdk";
+export { 
+  searchObservations, 
+  searchSessions, 
+  searchPrompts, 
+  searchUserObservations,
+  getObservationsByFile, 
+  getObservationsByType,
+  smartContextInjection,
+  formatContextForInjection 
+} from "./search";
+export { stripAllMemoryTags, stripPrivateTags, isFullyPrivate, truncateInput, truncateOutput } from "./privacy";
 export { memSearchTool } from "./tools/mem-search";

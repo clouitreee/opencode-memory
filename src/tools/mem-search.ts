@@ -3,12 +3,22 @@ import {
   searchObservations,
   searchSessions,
   searchPrompts,
+  searchUserObservations,
   getObservationsByFile,
   getObservationsByType,
   formatContextForInjection,
-  type SearchResult
+  type SearchResult,
+  type UserObservationResult
 } from "../search";
-import { getRecentObservations, getRecentSessions, type Observation } from "../db";
+import { 
+  getRecentObservations, 
+  getRecentSessions, 
+  getTopConcepts,
+  getObservationsByConcept,
+  getUserObservations,
+  getStats,
+  type Observation 
+} from "../db";
 
 function obsToResult(obs: Observation[]): SearchResult[] {
   return obs.map(o => ({
@@ -18,7 +28,8 @@ function obsToResult(obs: Observation[]): SearchResult[] {
     compressed_summary: o.compressed_summary || "",
     files_referenced: o.files_referenced,
     created_at: o.created_at,
-    rank: 0
+    rank: 0,
+    weighted_rank: 0
   }));
 }
 
@@ -27,17 +38,19 @@ export const memSearchTool = tool({
 - Previous work on files, features, or bugs
 - Decisions made in earlier sessions
 - Patterns and discoveries from past conversations
-
-Call this when the user asks about work done previously, or when context from past sessions would help.
+- User-level preferences and patterns (cross-project)
 
 Operations:
-- search: Full-text search observations
+- search: Full-text search observations (with temporal decay)
 - sessions: Search session summaries
 - prompts: Search user prompts
 - by_file: Find observations referencing a specific file
-- by_type: Filter by observation type (decision, bugfix, feature, refactor, discovery, pattern, change, note)
+- by_type: Filter by observation type (decision, bugfix, feature, etc.)
+- by_concept: Find observations by concept/tag
+- concepts: List top concepts with frequencies
 - recent: Get recent observations for current project
-- timeline: Get context around a specific session`,
+- user: Get user-level memories (cross-project preferences)
+- stats: Get memory statistics`,
 
   args: {
     operation: tool.schema.enum([
@@ -45,9 +58,13 @@ Operations:
       "sessions", 
       "prompts", 
       "by_file", 
-      "by_type", 
+      "by_type",
+      "by_concept",
+      "concepts",
       "recent",
-      "timeline"
+      "user",
+      "timeline",
+      "stats"
     ]),
     query: tool.schema.string().optional().describe("Search query for text search operations"),
     file_path: tool.schema.string().optional().describe("File path for by_file operation"),
@@ -55,6 +72,7 @@ Operations:
       "decision", "bugfix", "feature", "refactor", 
       "discovery", "pattern", "change", "note"
     ]).optional().describe("Observation type for by_type operation"),
+    concept: tool.schema.string().optional().describe("Concept name for by_concept operation"),
     limit: tool.schema.number().optional().default(10).describe("Maximum results to return"),
     project: tool.schema.string().optional().describe("Project to search within (defaults to current)"),
   },
@@ -63,7 +81,6 @@ Operations:
     const project = args.project || context.directory.split("/").pop() || "default";
     const limit = args.limit || 10;
     
-    let results: SearchResult[] = [];
     let output = "";
     
     switch (args.operation) {
@@ -71,19 +88,16 @@ Operations:
         if (!args.query) {
           return "Error: query is required for search operation";
         }
-        results = searchObservations(args.query, project, limit);
+        const results = searchObservations(args.query, project, limit);
         output = formatResults(results, `Search results for: "${args.query}"`);
         break;
       }
       
       case "sessions": {
-        if (!args.query) {
-          const sessions = getRecentSessions(project, limit);
-          output = formatSessionResults(sessions);
-        } else {
-          const sessions = searchSessions(args.query, project, limit);
-          output = formatSessionResults(sessions);
-        }
+        const sessions = args.query 
+          ? searchSessions(args.query, project, limit)
+          : getRecentSessions(project, limit);
+        output = formatSessionResults(sessions);
         break;
       }
       
@@ -100,7 +114,7 @@ Operations:
         if (!args.file_path) {
           return "Error: file_path is required for by_file operation";
         }
-        results = getObservationsByFile(args.file_path, project, limit);
+        const results = getObservationsByFile(args.file_path, project, limit);
         output = formatResults(results, `Observations for file: ${args.file_path}`);
         break;
       }
@@ -109,14 +123,48 @@ Operations:
         if (!args.type) {
           return "Error: type is required for by_type operation";
         }
-        results = getObservationsByType(args.type, project, limit);
+        const results = getObservationsByType(args.type, project, limit);
         output = formatResults(results, `Observations of type: ${args.type}`);
         break;
       }
       
+      case "by_concept": {
+        if (!args.concept) {
+          return "Error: concept is required for by_concept operation";
+        }
+        const obs = getObservationsByConcept(args.concept, limit);
+        const results = obsToResult(obs);
+        output = formatResults(results, `Observations tagged with: ${args.concept}`);
+        break;
+      }
+      
+      case "concepts": {
+        const concepts = getTopConcepts(limit);
+        output = formatConceptResults(concepts);
+        break;
+      }
+      
       case "recent": {
-        results = obsToResult(getRecentObservations(project, limit));
+        const obs = getRecentObservations(project, limit);
+        const results = obsToResult(obs);
         output = formatResults(results, "Recent observations");
+        break;
+      }
+      
+      case "user": {
+        if (args.query) {
+          const results = searchUserObservations(args.query, limit);
+          output = formatUserObsResults(results);
+        } else {
+          const userObs = getUserObservations(limit);
+          output = formatUserObsList(userObs);
+        }
+        break;
+      }
+      
+      case "stats": {
+        const stats = getStats();
+        output = formatStats(stats);
         break;
       }
       
@@ -145,6 +193,9 @@ function formatResults(results: SearchResult[], title: string): string {
     lines.push(`${r.compressed_summary}`);
     if (r.files_referenced) {
       lines.push(`**Files:** ${r.files_referenced}`);
+    }
+    if (r.weighted_rank > 0) {
+      lines.push(`*Relevance: ${r.weighted_rank.toFixed(2)}*`);
     }
     lines.push("");
   }
@@ -195,6 +246,95 @@ function formatPromptResults(prompts: Array<{
     lines.push(p.prompt);
     lines.push("");
   }
+  
+  return lines.join("\n");
+}
+
+function formatConceptResults(concepts: Array<{
+  id: number;
+  name: string;
+  frequency: number;
+  last_seen: string;
+}>): string {
+  if (concepts.length === 0) {
+    return "No concepts found.";
+  }
+  
+  const lines = ["## Top Concepts", ""];
+  
+  for (const c of concepts) {
+    lines.push(`- **${c.name}** (${c.frequency} occurrences)`);
+  }
+  
+  return lines.join("\n");
+}
+
+function formatUserObsResults(results: UserObservationResult[]): string {
+  if (results.length === 0) {
+    return "No user-level memories found.";
+  }
+  
+  const lines = ["## User Memories (Search Results)", ""];
+  
+  for (const r of results) {
+    lines.push(`### [${r.observation_type}]`);
+    lines.push(r.content);
+    if (r.metadata) {
+      try {
+        const meta = JSON.parse(r.metadata);
+        lines.push(`*Context: ${JSON.stringify(meta)}*`);
+      } catch {}
+    }
+    lines.push("");
+  }
+  
+  return lines.join("\n");
+}
+
+function formatUserObsList(observations: Array<{
+  id: number;
+  observation_type: string;
+  content: string;
+  metadata: string | null;
+  created_at: string;
+  last_accessed: string;
+  access_count: number;
+}>): string {
+  if (observations.length === 0) {
+    return "No user-level memories stored.";
+  }
+  
+  const lines = ["## User Memories (Cross-Project)", ""];
+  lines.push("These are preferences and patterns learned across all projects:");
+  lines.push("");
+  
+  for (const o of observations) {
+    lines.push(`- [${o.observation_type}] ${o.content}`);
+  }
+  
+  return lines.join("\n");
+}
+
+function formatStats(stats: {
+  totalSessions: number;
+  totalObservations: number;
+  totalUserObservations: number;
+  totalConcepts: number;
+  pendingCompressions: number;
+  oldestObservation: string | null;
+}): string {
+  const lines = [
+    "## Memory Statistics",
+    "",
+    `| Metric | Value |`,
+    `|--------|-------|`,
+    `| Total Sessions | ${stats.totalSessions} |`,
+    `| Total Observations | ${stats.totalObservations} |`,
+    `| User Memories | ${stats.totalUserObservations} |`,
+    `| Concepts | ${stats.totalConcepts} |`,
+    `| Pending Compressions | ${stats.pendingCompressions} |`,
+    `| Oldest Observation | ${stats.oldestObservation || "N/A"} |`,
+  ];
   
   return lines.join("\n");
 }

@@ -5,11 +5,15 @@ Persistent memory system for [OpenCode](https://opencode.ai) - cross-session con
 ## Features
 
 - **Persistent Memory** - Context survives between sessions
-- **AI Compression** - Observations are automatically compressed using LLMs
-- **Full-Text Search** - FTS5-powered search through all past observations
-- **Privacy Tags** - Use `<private>...</private>` to exclude sensitive content
-- **Custom Tool** - `mem-search` tool for querying past work
-- **Progressive Disclosure** - Search → Timeline → Details
+- **AI Compression** - Observations automatically compressed via async queue
+- **Temporal Decay** - Recent observations weighted higher in search
+- **Smart Context Injection** - First prompt used to find relevant context
+- **Full-Text Search** - FTS5 with Porter stemmer + unicode61
+- **Privacy Tags** - `<private>...</private>` excludes sensitive content
+- **User-Level Memory** - Cross-project preferences and patterns
+- **Concept Graph** - Automatic concept extraction with frequencies
+- **Memory Budget** - Garbage collection for old observations
+- **Custom Tool** - `mem-search` with 11 operations
 
 ## Installation
 
@@ -39,24 +43,52 @@ Or for local development:
 
 ## Configuration
 
-Set the `OPENROUTER_API_KEY` environment variable for AI compression:
+### API Keys
+
+Set environment variables for the LLM provider:
 
 ```bash
+# Option 1: OpenRouter (recommended, default)
 export OPENROUTER_API_KEY="your-key-here"
-```
 
-Or configure a different provider:
-
-```bash
+# Option 2: OpenAI
 export OPENCODE_MEMORY_PROVIDER="openai"
 export OPENAI_API_KEY="your-key-here"
+
+# Option 3: Moonshot (Kimi)
+export OPENCODE_MEMORY_PROVIDER="moonshot"
+export MOONSHOT_API_KEY="your-key-here"
+
+# Option 4: Zhipu (GLM)
+export OPENCODE_MEMORY_PROVIDER="zhipu"
+export ZHIPU_API_KEY="your-key-here"
+
+# Custom model
+export OPENCODE_MEMORY_MODEL="openrouter/z-ai/glm-5"
+```
+
+### Memory Settings
+
+```typescript
+import { setMemoryConfig } from "opencode-memory";
+
+setMemoryConfig({
+  max_observations_per_project: 500,
+  max_observations_per_user: 2000,
+  max_age_days: 90,
+  gc_enabled: true,
+  gc_interval_hours: 24
+});
 ```
 
 ## Usage
 
 ### Automatic Context Injection
 
-When you start a new session, opencode-memory automatically injects context from previous sessions in the same project.
+When you start a new session, opencode-memory:
+1. Analyzes your first prompt
+2. Searches for relevant past observations
+3. Injects context + user-level preferences
 
 ### Privacy Tags
 
@@ -82,34 +114,77 @@ Show me recent work on this project
 What decisions did we make about the database schema?
 ```
 
+#### Available Operations
+
+| Operation | Description |
+|-----------|-------------|
+| `search` | Full-text search with temporal decay |
+| `sessions` | Search/list sessions |
+| `prompts` | Search user prompts |
+| `by_file` | Observations for a file |
+| `by_type` | Filter by type (bugfix, feature, etc.) |
+| `by_concept` | Observations by concept/tag |
+| `concepts` | Top concepts with frequencies |
+| `recent` | Recent observations |
+| `user` | User-level memories (cross-project) |
+| `stats` | Memory statistics |
+
 ## Architecture
 
 ```
 ~/.opencode-memory/
-├── memory.db          # SQLite database with FTS5
-└── settings.json      # Configuration
+├── memory.db              # SQLite database with FTS5
+├── memory.db-wal          # Write-ahead log
+└── migrations_state/      # Migration markers
 
 opencode-memory/
 ├── src/
-│   ├── plugin.ts      # Main plugin entry point
-│   ├── db.ts          # SQLite operations
-│   ├── sdk.ts         # AI compression SDK
-│   ├── search.ts      # FTS5 search
-│   ├── privacy.ts     # Tag stripping
+│   ├── plugin.ts          # Main plugin entry
+│   ├── db.ts              # SQLite + queue + GC
+│   ├── sdk.ts             # Provider-agnostic AI SDK
+│   ├── search.ts          # FTS5 with temporal decay
+│   ├── privacy.ts         # Tag stripping + truncation
 │   └── tools/
 │       └── mem-search.ts  # Custom search tool
 └── migrations/
-    └── 001_init.sql   # Database schema
+    ├── 001_init.sql       # Base schema
+    └── 002_fixes_and_features.sql  # New features
 ```
+
+## Database Schema
+
+### Core Tables
+
+| Table | Description |
+|-------|-------------|
+| `sessions` | OpenCode sessions with scope |
+| `observations` | Tool usage observations |
+| `summaries` | AI-generated session summaries |
+| `user_observations` | Cross-project user memories |
+
+### Supporting Tables
+
+| Table | Description |
+|-------|-------------|
+| `concepts` | Extracted concepts with frequencies |
+| `observation_concepts` | Many-to-many relationship |
+| `compression_queue` | Async compression jobs |
+| `memory_config` | Configuration settings |
+
+### FTS5 Tables
+
+- `observations_fts` - Full-text search on observations
+- `prompts_fts` - Search user prompts
+- `user_observations_fts` - Search user memories
 
 ## Hooks
 
 | OpenCode Event | Action |
 |----------------|--------|
-| `session.created` | Inject context from previous sessions |
+| `session.created` | Inject smart context + user memories |
 | `chat.message` | Save user prompts |
-| `tool.execute.after` | Capture and compress tool usage |
-| `session.idle` | Generate session summary |
+| `tool.execute.after` | Queue observation for compression |
+| `session.idle` | Generate summary, extract user memory |
 | `session.deleted` | Mark session completed |
 | `session.compacted` | Inject memory context |
 
@@ -120,11 +195,7 @@ opencode-memory/
 ```typescript
 import { MemorySDK } from "opencode-memory";
 
-const sdk = new MemorySDK({
-  provider: "openrouter",
-  model: "openrouter/z-ai/glm-5",
-  apiKey: process.env.OPENROUTER_API_KEY
-});
+const sdk = new MemorySDK(); // Auto-config from env
 
 // Compress an observation
 const compressed = await sdk.compressObservation(
@@ -138,18 +209,45 @@ const summary = await sdk.summarizeSession(
   ["Fix the login bug"],
   ["Read: auth.ts", "Edit: auth.ts"]
 );
+
+// Extract user-level memory
+const userMemory = await sdk.extractUserMemory([
+  "Pattern: prefers TypeScript",
+  "Pattern: uses Bun runtime"
+]);
 ```
 
 ### Search
 
 ```typescript
-import { searchObservations, getObservationsByFile } from "opencode-memory";
+import { searchObservations, smartContextInjection } from "opencode-memory";
 
-// Full-text search
+// Full-text search with temporal decay
 const results = searchObservations("authentication bug", "my-project");
 
-// By file
-const fileObs = getObservationsByFile("/src/auth.ts", "my-project");
+// Smart context based on prompt
+const context = smartContextInjection("my-project", "fix login bug");
+```
+
+### Database
+
+```typescript
+import { 
+  getStats, 
+  runGarbageCollection, 
+  getTopConcepts 
+} from "opencode-memory";
+
+// Get statistics
+const stats = getStats();
+console.log(`Observations: ${stats.totalObservations}`);
+
+// Run garbage collection
+const gc = runGarbageCollection();
+console.log(`Deleted: ${gc.observationsDeleted} observations`);
+
+// Top concepts
+const concepts = getTopConcepts(20);
 ```
 
 ## Development
@@ -161,24 +259,39 @@ bun install
 # Build
 bun run build
 
-# Run tests
-bun test
-
 # Type check
 bun run typecheck
 
-# Manual database migration
+# Run migrations manually
 bun run db:migrate
+
+# Test
+bun test
 ```
 
-## Model Recommendations
+## Recommended Models
 
-For best results with AI compression:
+For AI compression, these models work well:
 
-1. **GLM-5** (via OpenRouter) - Excellent for coding context, 200K context
-2. **Kimi K2.5** - Strong alternative, good for long sessions
-3. **GPT-4o-mini** - Fast and cheap for simple compression
-4. **Local models** - Use with Ollama for privacy
+| Provider | Model | Notes |
+|----------|-------|-------|
+| OpenRouter | `z-ai/glm-5` | Default, 200K context, excellent for coding |
+| OpenRouter | `moonshotai/kimi-k2` | Strong alternative |
+| OpenAI | `gpt-4o-mini` | Fast and cheap |
+| Local | `llama3.2` | Privacy-first via Ollama |
+
+## Comparison vs claude-mem
+
+| Feature | opencode-memory | claude-mem |
+|---------|----------------|------------|
+| Platform | OpenCode | Claude Code |
+| Runtime | Bun native | Node.js + Bun |
+| Compression | Async queue | Sync/blocking |
+| Temporal decay | ✅ | ❌ |
+| User-level memory | ✅ | ❌ |
+| Concept graph | ✅ | ❌ |
+| Memory budget | ✅ | ❌ |
+| Smart context | ✅ | ❌ |
 
 ## License
 

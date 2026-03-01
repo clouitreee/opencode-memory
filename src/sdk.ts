@@ -25,6 +25,15 @@ const DEFAULT_MODELS: Record<string, string> = {
   local: "llama3.2",
 };
 
+const API_KEY_ENV_VARS: Record<string, string> = {
+  openrouter: "OPENROUTER_API_KEY",
+  openai: "OPENAI_API_KEY",
+  anthropic: "ANTHROPIC_API_KEY",
+  moonshot: "MOONSHOT_API_KEY",
+  zhipu: "ZHIPU_API_KEY",
+  local: "LOCAL_API_KEY",
+};
+
 const COMPRESS_PROMPT = `You are a memory compression engine. Analyze tool usage observations and extract only the essential, reusable knowledge.
 
 Given tool execution data, output a JSON object with:
@@ -33,8 +42,7 @@ Given tool execution data, output a JSON object with:
 - files: Array of file paths referenced
 - concepts: Array of key concepts/tags (max 5)
 
-Be extremely concise. Focus on WHAT was learned, not HOW.
-`;
+Be extremely concise. Focus on WHAT was learned, not HOW.`;
 
 const SUMMARIZE_PROMPT = `You are a session summarizer. Given a conversation transcript, create a structured summary.
 
@@ -45,23 +53,50 @@ Output JSON with:
 - completed: What was accomplished (bullet points as string)
 - next_steps: What remains to be done (bullet points as string)
 
-Be concise but comprehensive. This summary will be used for context in future sessions.
-`;
+Be concise but comprehensive. This summary will be used for context in future sessions.`;
+
+const USER_MEMORY_PROMPT = `You are a user memory extractor. Analyze observations and extract user-level preferences, patterns, and recurring decisions that should be remembered across all projects.
+
+Output JSON with:
+- type: One of: preference, pattern, decision, skill
+- content: The extracted memory (one clear sentence)
+- metadata: Any relevant context (project, frequency, etc.)
+
+Only extract memories that are truly user-level (not project-specific).`;
+
+function getEnvProvider(): SDKConfig["provider"] {
+  const provider = process.env.OPENCODE_MEMORY_PROVIDER?.toLowerCase();
+  if (provider && PROVIDERS[provider]) {
+    return provider as SDKConfig["provider"];
+  }
+  return "openrouter";
+}
+
+function getEnvApiKey(provider: SDKConfig["provider"]): string {
+  const envVar = API_KEY_ENV_VARS[provider];
+  return process.env[envVar] || process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY || "";
+}
+
+function getEnvModel(provider: SDKConfig["provider"]): string {
+  return process.env.OPENCODE_MEMORY_MODEL || DEFAULT_MODELS[provider] || DEFAULT_MODELS.openrouter;
+}
 
 export class MemorySDK {
   private client: OpenAI;
   private model: string;
+  private provider: SDKConfig["provider"];
   
-  constructor(config: SDKConfig) {
-    const apiKey = config.apiKey || process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY || "";
-    const baseURL = config.baseURL || PROVIDERS[config.provider] || PROVIDERS.openrouter;
-    this.model = config.model || DEFAULT_MODELS[config.provider] || DEFAULT_MODELS.openrouter;
+  constructor(config?: Partial<SDKConfig>) {
+    this.provider = config?.provider || getEnvProvider();
+    const apiKey = config?.apiKey || getEnvApiKey(this.provider);
+    const baseURL = config?.baseURL || PROVIDERS[this.provider];
+    this.model = config?.model || getEnvModel(this.provider);
     
     this.client = new OpenAI({
       apiKey,
       baseURL,
-      defaultHeaders: config.provider === "openrouter" ? {
-        "HTTP-Referer": "https://github.com/opencode-memory",
+      defaultHeaders: this.provider === "openrouter" ? {
+        "HTTP-Referer": "https://github.com/clouitreee/opencode-memory",
         "X-Title": "opencode-memory"
       } : undefined
     });
@@ -159,6 +194,43 @@ ${observations.slice(0, 20).join("\n")}`;
     }
   }
   
+  async extractUserMemory(
+    observations: string[]
+  ): Promise<{
+    type: string;
+    content: string;
+    metadata: Record<string, unknown>;
+  } | null> {
+    const content = `Observations to analyze:
+${observations.join("\n---\n")}`;
+    
+    try {
+      const response = await this.client.chat.completions.create({
+        model: this.model,
+        messages: [
+          { role: "system", content: USER_MEMORY_PROMPT },
+          { role: "user", content }
+        ],
+        max_tokens: 256,
+        temperature: 0.3,
+        response_format: { type: "json_object" }
+      });
+      
+      const result = JSON.parse(response.choices[0].message.content || "{}");
+      
+      if (!result.content) return null;
+      
+      return {
+        type: result.type || "note",
+        content: result.content,
+        metadata: result.metadata || {}
+      };
+    } catch (error) {
+      console.error("[opencode-memory] User memory extraction error:", error);
+      return null;
+    }
+  }
+  
   async extractContext(
     observations: string[],
     query: string
@@ -193,15 +265,16 @@ let sdkInstance: MemorySDK | null = null;
 
 export function getSDK(): MemorySDK {
   if (!sdkInstance) {
-    sdkInstance = new MemorySDK({
-      provider: "openrouter",
-      model: process.env.OPENCODE_MEMORY_MODEL
-    });
+    sdkInstance = new MemorySDK();
   }
   return sdkInstance;
 }
 
-export function initSDK(config: SDKConfig): MemorySDK {
+export function initSDK(config: Partial<SDKConfig>): MemorySDK {
   sdkInstance = new MemorySDK(config);
   return sdkInstance;
+}
+
+export function resetSDK(): void {
+  sdkInstance = null;
 }

@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   project TEXT NOT NULL,
   directory TEXT,
   first_user_prompt TEXT,
-  prompt_counter INTEGER DEFAULT 1,
+  prompt_counter INTEGER DEFAULT 0,
   status TEXT DEFAULT 'active' CHECK(status IN ('active', 'idle', 'completed')),
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -82,10 +82,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS observations_fts USING fts5(
 );
 
 -- FTS5 triggers to keep search index in sync
-CREATE TRIGGER IF NOT EXISTS observations_ai AFTER INSERT ON observations BEGIN
-  INSERT INTO observations_fts(rowid, id, session_id, tool_name, compressed_summary, files_referenced)
-  VALUES (new.id, new.id, new.session_id, new.tool_name, new.compressed_summary, new.files_referenced);
-END;
+-- Note: INSERT trigger removed - we only add to FTS when compressed_summary is set via UPDATE
+-- This prevents NULL entries in FTS index
 
 CREATE TRIGGER IF NOT EXISTS observations_ad AFTER DELETE ON observations BEGIN
   INSERT INTO observations_fts(observations_fts, rowid, id, session_id, tool_name, compressed_summary, files_referenced)
@@ -117,6 +115,13 @@ END;
 CREATE TRIGGER IF NOT EXISTS prompts_ad AFTER DELETE ON user_prompts BEGIN
   INSERT INTO prompts_fts(prompts_fts, rowid, id, session_id, prompt)
   VALUES('delete', old.id, old.id, old.session_id, old.prompt);
+END;
+
+CREATE TRIGGER IF NOT EXISTS prompts_au AFTER UPDATE ON user_prompts BEGIN
+  INSERT INTO prompts_fts(prompts_fts, rowid, id, session_id, prompt)
+  VALUES('delete', old.id, old.id, old.session_id, old.prompt);
+  INSERT INTO prompts_fts(rowid, id, session_id, prompt)
+  VALUES (new.id, new.id, new.session_id, new.prompt);
 END;
 
 -- Settings table
