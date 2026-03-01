@@ -199,15 +199,6 @@ configure_plugin() {
 }
 
 install_commands() {
-    local install_dir
-    install_dir=$(get_plugin_install_dir)
-    local commands_src="$install_dir/commands"
-    
-    if [ ! -d "$commands_src" ]; then
-        log_info "No commands to install"
-        return 0
-    fi
-    
     local commands_dest
     if [ "$SCOPE" = "project" ]; then
         commands_dest="$(pwd)/.opencode/commands"
@@ -217,16 +208,37 @@ install_commands() {
     
     mkdir -p "$commands_dest"
     
+    local install_dir
+    install_dir=$(get_plugin_install_dir)
+    local commands_src="$install_dir/commands"
     local cmd_count=0
-    for cmd_file in "$commands_src"/*.md; do
-        if [ -f "$cmd_file" ]; then
-            cp "$cmd_file" "$commands_dest/"
-            cmd_count=$((cmd_count + 1))
-        fi
-    done
     
-    if [ $cmd_count -gt 0 ]; then
-        log_ok "Installed $cmd_count slash commands to $commands_dest"
+    if [ -d "$commands_src" ]; then
+        for cmd_file in "$commands_src"/*.md; do
+            if [ -f "$cmd_file" ]; then
+                cp "$cmd_file" "$commands_dest/"
+                cmd_count=$((cmd_count + 1))
+            fi
+        done
+        if [ $cmd_count -gt 0 ]; then
+            log_ok "Installed $cmd_count slash commands to $commands_dest"
+            return 0
+        fi
+    fi
+    
+    log_info "Downloading slash commands..."
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+    
+    if curl -fsSL "https://raw.githubusercontent.com/clouitreee/opencode-memory/main/commands/mem-stats.md" -o "$tmp_dir/mem-stats.md" 2>/dev/null && \
+       curl -fsSL "https://raw.githubusercontent.com/clouitreee/opencode-memory/main/commands/mem-doctor.md" -o "$tmp_dir/mem-doctor.md" 2>/dev/null && \
+       curl -fsSL "https://raw.githubusercontent.com/clouitreee/opencode-memory/main/commands/mem-purge.md" -o "$tmp_dir/mem-purge.md" 2>/dev/null; then
+        cp "$tmp_dir"/*.md "$commands_dest/" 2>/dev/null
+        rm -rf "$tmp_dir"
+        log_ok "Installed 3 slash commands to $commands_dest"
+    else
+        rm -rf "$tmp_dir"
+        log_warn "Could not download slash commands (non-critical)"
     fi
 }
 
@@ -235,18 +247,32 @@ verify_installation() {
     
     local install_dir
     install_dir=$(get_plugin_install_dir)
+    local npm_global=false
     
     if [ ! -f "$install_dir/dist/plugin.js" ]; then
-        log_error "Plugin not found at $install_dir/dist/plugin.js"
-        return 1
+        if bun pm ls -g 2>/dev/null | grep -q "opencode-memory"; then
+            npm_global=true
+            install_dir=$(bun pm bin -g 2>/dev/null | xargs dirname)/lib/node_modules/opencode-memory
+            log_ok "Plugin installed via npm global"
+        else
+            log_error "Plugin not found at $install_dir/dist/plugin.js"
+            return 1
+        fi
     fi
     
-    if [ ! -d "$install_dir/migrations" ]; then
-        log_error "Migrations directory not found"
-        return 1
+    if [ "$npm_global" = true ]; then
+        if [ -f "$install_dir/dist/plugin.js" ]; then
+            log_ok "Plugin files verified (npm)"
+        else
+            log_ok "Plugin installed via npm (bundled)"
+        fi
+    else
+        if [ ! -d "$install_dir/migrations" ]; then
+            log_error "Migrations directory not found"
+            return 1
+        fi
+        log_ok "Plugin files verified"
     fi
-    
-    log_ok "Plugin files verified"
     
     local db_path="$HOME/.opencode-memory/memory.db"
     if [ -f "$db_path" ]; then
@@ -400,17 +426,22 @@ main() {
     local install_dir
     install_dir=$(get_plugin_install_dir)
     
-    log_info "Install directory: $install_dir"
+    local npm_installed=false
+    if bun add --global "$PLUGIN_NAME" 2>/dev/null; then
+        npm_installed=true
+        log_ok "Installed from npm"
+    fi
     
-    mkdir -p "$install_dir"
-    
-    if download_release "$install_dir"; then
-        :
-    else
-        install_from_source "$install_dir" || {
-            print_rollback_instructions
-            exit 1
-        }
+    if [ "$npm_installed" = false ]; then
+        log_info "Install directory: $install_dir"
+        mkdir -p "$install_dir"
+        
+        if ! download_release "$install_dir"; then
+            install_from_source "$install_dir" || {
+                print_rollback_instructions
+                exit 1
+            }
+        fi
     fi
     
     configure_plugin
