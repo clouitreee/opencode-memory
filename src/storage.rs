@@ -1,3 +1,4 @@
+use crate::embeddings::{cosine_similarity, Embedder};
 use crate::models::{Config, Memory, Stats};
 use chrono::Utc;
 use directories::ProjectDirs;
@@ -118,6 +119,52 @@ impl Storage {
             .values()
             .filter(|m| m.content.to_lowercase().contains(&query_lower))
             .collect()
+    }
+
+    pub fn search_semantic(&mut self, query: &str, limit: usize) -> Vec<(f32, &Memory)> {
+        let mut embedder = Embedder::new();
+        let query_embedding = embedder.embed(&[query.to_string()]);
+
+        if query_embedding.is_empty() {
+            return Vec::new();
+        }
+
+        let query_vec = &query_embedding[0];
+        let mut results: Vec<(f32, &Memory)> = self
+            .memories
+            .values()
+            .filter_map(|m| {
+                m.embedding.as_ref().map(|emb| {
+                    let sim = cosine_similarity(query_vec, emb);
+                    (sim, m)
+                })
+            })
+            .filter(|(score, _)| *score > 0.1)
+            .collect();
+
+        results.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(limit);
+        results
+    }
+
+    pub fn embed_and_save(&mut self, memory: &mut Memory) -> Result<(), StorageError> {
+        let mut embedder = Embedder::new();
+        let embeddings = embedder.embed(&[memory.content.clone()]);
+
+        if let Some(embedding) = embeddings.into_iter().next() {
+            memory.embedding = Some(embedding);
+        }
+
+        let id = memory.id.clone();
+        let path = self.base_path.join("memories").join(format!("{}.json", id));
+        let content = serde_json::to_string_pretty(&*memory)?;
+        fs::write(path, content)?;
+
+        if let Some(m) = self.memories.get_mut(&id) {
+            m.embedding = memory.embedding.clone();
+        }
+
+        Ok(())
     }
 
     pub fn update_embedding(&mut self, id: &str, embedding: Vec<f32>) -> Result<(), StorageError> {

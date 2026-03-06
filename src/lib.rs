@@ -1,3 +1,4 @@
+pub mod embeddings;
 pub mod extractor;
 pub mod injector;
 pub mod models;
@@ -54,6 +55,7 @@ impl LongMem {
 
         let mut results = Vec::new();
         for mut memory in memories {
+            let _ = self.storage.embed_and_save(&mut memory);
             if let Ok(saved) = self.storage.save(memory) {
                 results.push(saved);
             }
@@ -62,20 +64,18 @@ impl LongMem {
         results
     }
 
-    pub fn retrieve(&self, query: &str, limit: usize) -> Vec<&Memory> {
+    pub fn retrieve(&mut self, query: &str, limit: usize) -> Vec<&Memory> {
+        let semantic_results = self.storage.search_semantic(query, limit);
+        if !semantic_results.is_empty() {
+            return semantic_results.into_iter().map(|(_, m)| m).collect();
+        }
         let text_results = self.storage.search_by_text(query);
         text_results.into_iter().take(limit).collect()
     }
 
-    pub fn retrieve_with_embeddings(&self, query: &str, _limit: usize) -> Vec<&Memory> {
-        let all_with_embeddings = self.storage.get_memories_with_embeddings();
-        // TODO: implementar búsqueda por similitud cuando tengamos fastembed
-        // Por ahora retorna las que coinciden por texto
-        let query_lower = query.to_lowercase();
-        all_with_embeddings
-            .into_iter()
-            .filter(|m| m.content.to_lowercase().contains(&query_lower))
-            .collect()
+    pub fn retrieve_with_embeddings(&mut self, query: &str, limit: usize) -> Vec<&Memory> {
+        let results = self.storage.search_semantic(query, limit);
+        results.into_iter().map(|(_, m)| m).collect()
     }
 
     pub fn build_context(&self, memories: &[&Memory]) -> String {
