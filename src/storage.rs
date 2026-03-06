@@ -7,6 +7,9 @@ use std::fs;
 use std::path::PathBuf;
 use thiserror::Error;
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 #[derive(Error, Debug)]
 pub enum StorageError {
     #[error("IO error: {0}")]
@@ -25,11 +28,36 @@ pub struct Storage {
     config: Config,
 }
 
+fn set_restrictive_permissions_dir(path: &PathBuf) -> Result<(), std::io::Error> {
+    #[cfg(unix)]
+    {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+fn set_restrictive_permissions_file(path: &PathBuf) -> Result<(), std::io::Error> {
+    #[cfg(unix)]
+    {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
 impl Storage {
     pub fn new(base_path: Option<PathBuf>) -> Result<Self, StorageError> {
         let base = base_path.ok_or(StorageError::NoStorageDir)?;
+        
+        if !base.exists() {
+            fs::create_dir_all(&base)?;
+            set_restrictive_permissions_dir(&base)?;
+        }
+
         let memories_dir = base.join("memories");
-        fs::create_dir_all(&memories_dir)?;
+        if !memories_dir.exists() {
+            fs::create_dir_all(&memories_dir)?;
+            set_restrictive_permissions_dir(&memories_dir)?;
+        }
 
         let config_path = base.join("config.json");
         let config = if config_path.exists() {
@@ -77,10 +105,12 @@ impl Storage {
 
         let memories_dir = self.base_path.join("memories");
         fs::create_dir_all(&memories_dir)?;
+        set_restrictive_permissions_dir(&memories_dir)?;
 
         let path = memories_dir.join(format!("{}.json", id));
         let content = serde_json::to_string_pretty(&memory)?;
         fs::write(&path, content)?;
+        set_restrictive_permissions_file(&path)?;
 
         self.memories.insert(id, memory);
         self.memories.get(&id).ok_or(StorageError::NotFound(id))
@@ -220,7 +250,8 @@ impl Storage {
     pub fn persist_config(&self) -> Result<(), StorageError> {
         let config_path = self.base_path.join("config.json");
         let content = serde_json::to_string_pretty(&self.config)?;
-        fs::write(config_path, content)?;
+        fs::write(&config_path, content)?;
+        set_restrictive_permissions_file(&config_path)?;
         Ok(())
     }
 }

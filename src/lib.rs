@@ -2,11 +2,13 @@ pub mod embeddings;
 pub mod extractor;
 pub mod injector;
 pub mod models;
+pub mod sanitizer;
 pub mod storage;
 
 use extractor::MemoryExtractor;
 use injector::ContextInjector;
 use models::{Memory, Stats};
+use sanitizer::Sanitizer;
 use storage::{get_default_storage_path, Storage, StorageError};
 use uuid::Uuid;
 
@@ -14,6 +16,7 @@ pub struct LongMem {
     storage: Storage,
     extractor: MemoryExtractor,
     injector: ContextInjector,
+    sanitizer: Sanitizer,
     session_id: String,
     project: Option<String>,
     turn_count: u32,
@@ -29,6 +32,7 @@ impl LongMem {
             storage,
             extractor: MemoryExtractor::new(config.importance_threshold),
             injector: ContextInjector::new(),
+            sanitizer: Sanitizer::new(),
             session_id: Uuid::new_v4().to_string(),
             project: config.default_project.clone(),
             turn_count: 0,
@@ -44,13 +48,17 @@ impl LongMem {
         let project = self.project.clone();
         let session_id = self.session_id.clone();
 
-        let mut memories = self.extractor.extract(user_input, model_output);
+        let sanitized_input = self.sanitizer.sanitize_memory_content(user_input);
+        let sanitized_output = self.sanitizer.sanitize_memory_content(model_output);
+
+        let mut memories = self.extractor.extract(&sanitized_input, &sanitized_output);
 
         for mem in &mut memories {
             if let Some(ref p) = project {
                 mem.project = Some(p.clone());
             }
             mem.session_id = Some(session_id.clone());
+            mem.content = self.sanitizer.sanitize_memory_content(&mem.content);
         }
 
         let mut results = Vec::new();

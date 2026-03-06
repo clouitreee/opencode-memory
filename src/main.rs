@@ -84,26 +84,6 @@ enum Commands {
     },
 }
 
-const SECRET_PATTERNS: &[&str] = &[
-    r"(?i)\b(api_key|apikey|api-key)\s*[:=]\s*['\"]?[\w-]{20,}",
-    r"(?i)\b(password|passwd|pwd)\s*[:=]\s*['\"]?[\S]{8,}",
-    r"(?i)\b(secret|token|auth)\s*[:=]\s*['\"]?[\w-]{20,}",
-    r"(?i)\b(private_key|privatekey)\s*[:=]",
-    r"(?i)\b(bearer\s+[\w-]{20,})",
-    r"(?i)\b(aws_access_key|aws_secret)\s*[:=]",
-];
-
-fn contains_secrets(text: &str) -> bool {
-    for pattern in SECRET_PATTERNS {
-        if let Ok(re) = regex::Regex::new(pattern) {
-            if re.is_match(text) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -250,14 +230,6 @@ fn main() {
                         buffer.push('\n');
 
                         if buffer.len() > 512 {
-                            if contains_secrets(&buffer) {
-                                if !quiet {
-                                    eprintln!("Warning: potential secrets detected, skipping");
-                                }
-                                buffer.clear();
-                                continue;
-                            }
-
                             let memories = longmem.capture_turn(&buffer, "");
                             total_captured += memories.len();
 
@@ -284,23 +256,17 @@ fn main() {
             }
 
             if !buffer.trim().is_empty() {
-                if contains_secrets(&buffer) {
-                    if !quiet {
-                        eprintln!("Warning: potential secrets detected, skipping");
-                    }
-                } else {
-                    let memories = longmem.capture_turn(&buffer, "");
-                    total_captured += memories.len();
+                let memories = longmem.capture_turn(&buffer, "");
+                total_captured += memories.len();
 
-                    if !quiet && !memories.is_empty() {
-                        for mem in &memories {
-                            let preview = if mem.content.len() > 50 {
-                                format!("{}...", &mem.content[..50])
-                            } else {
-                                mem.content.clone()
-                            };
-                            eprintln!("[watch] captured: {}", preview);
-                        }
+                if !quiet && !memories.is_empty() {
+                    for mem in &memories {
+                        let preview = if mem.content.len() > 50 {
+                            format!("{}...", &mem.content[..50])
+                        } else {
+                            mem.content.clone()
+                        };
+                        eprintln!("[watch] captured: {}", preview);
                     }
                 }
             }
