@@ -6,9 +6,9 @@ use longmem::LongMem;
 
 #[derive(Parser)]
 #[command(name = "longmem")]
-#[command(about = "Memoria a largo plazo para modelos de terminal", long_about = None)]
+#[command(about = "Local memory layer for terminal-based AI workflows", long_about = None)]
 struct Cli {
-    #[arg(short, long, global = true)]
+    #[arg(short, long, global = true, env = "LONGMEM_PATH", help = "Custom storage path")]
     path: Option<PathBuf>,
 
     #[command(subcommand)]
@@ -17,56 +17,57 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Inicializar LongMem con un proyecto
+    /// Initialize LongMem state with an optional project
     Init {
-        /// Nombre del proyecto
+        /// Project name to associate with memories
         #[arg(short, long)]
         project: Option<String>,
     },
-    /// Capturar un turno de conversación
+    /// Capture a conversation turn (user input + model output)
     Capture {
-        /// Input del usuario
-        #[arg(short = 'u', long = "user")]
+        /// User input/question
+        #[arg(short = 'u', long = "user", required = true)]
         user_input: String,
-        /// Output del modelo
-        #[arg(short = 'm', long = "model")]
+        /// Model/assistant response
+        #[arg(short = 'm', long = "model", required = true)]
         model_output: String,
-        /// Proyecto al que pertenece
+        /// Project name (overrides default)
         #[arg(short, long)]
         project: Option<String>,
     },
-    /// Recuperar memorias relevantes
+    /// Search for relevant memories
     Retrieve {
-        /// Query de búsqueda
-        #[arg(short, long)]
+        /// Search query
+        #[arg(short, long, required = true)]
         query: String,
-        /// Número de resultados
+        /// Maximum number of results
         #[arg(short, long, default_value = "10")]
         limit: usize,
-        /// Proyecto específico
+        /// Filter by project name
         #[arg(short, long)]
         project: Option<String>,
     },
-    /// Listar todas las memorias
+    /// List all stored memories
     List {
-        /// Filtrar por proyecto
+        /// Filter by project name
         #[arg(short, long)]
         project: Option<String>,
     },
-    /// Ver estadísticas
+    /// Show memory statistics
     Stats {},
-    /// Eliminar una memoria
+    /// Delete a memory by ID
     Delete {
-        /// ID de la memoria
+        /// Memory ID to delete
         id: String,
     },
-    /// Consolidar memorias (limpiar obsoletas)
-    Consolidate {},
 }
 
 fn main() {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("longmem=info".parse().unwrap()))
+        .with_env_filter(
+            EnvFilter::from_default_env()
+                .add_directive("longmem=info".parse().unwrap()),
+        )
         .init();
 
     let cli = Cli::parse();
@@ -74,7 +75,7 @@ fn main() {
     let mut longmem = match LongMem::new(cli.path) {
         Ok(lm) => lm,
         Err(e) => {
-            eprintln!("Error inicializando LongMem: {}", e);
+            eprintln!("Error: failed to initialize LongMem: {}", e);
             std::process::exit(1);
         }
     };
@@ -83,9 +84,12 @@ fn main() {
         Commands::Init { project } => {
             if let Some(p) = project {
                 longmem.set_project(&p);
-                println!("LongMem inicializado para proyecto: {}", p);
+                if let Err(e) = longmem.storage.config_mut().persist_config() {
+                    eprintln!("Warning: failed to persist config: {}", e);
+                }
+                println!("Initialized LongMem for project: {}", p);
             } else {
-                println!("LongMem inicializado (sin proyecto)");
+                println!("Initialized LongMem (no project set)");
             }
         }
 
@@ -98,9 +102,18 @@ fn main() {
                 longmem.set_project(&p);
             }
             let memories = longmem.capture_turn(&user_input, &model_output);
-            println!("Capturadas {} memorias", memories.len());
-            for mem in memories {
-                println!("  - [{}] {}", &mem.id[..8], &mem.content[..mem.content.len().min(60)]);
+            if memories.is_empty() {
+                println!("No memories captured");
+            } else {
+                println!("Captured {} memory(ies):", memories.len());
+                for mem in &memories {
+                    let preview = if mem.content.len() > 60 {
+                        format!("{}...", &mem.content[..60])
+                    } else {
+                        mem.content.clone()
+                    };
+                    println!("  [{}] {}", &mem.id[..8], preview);
+                }
             }
         }
 
@@ -114,7 +127,7 @@ fn main() {
             }
             let memories = longmem.retrieve(&query, limit);
             if memories.is_empty() {
-                println!("No se encontraron memorias relevantes");
+                println!("No relevant memories found for: {}", query);
             } else {
                 let context = longmem.build_context(&memories);
                 println!("{}", context);
@@ -122,27 +135,33 @@ fn main() {
         }
 
         Commands::List { project } => {
-            let memories = if let Some(p) = project {
-                longmem.set_project(&p);
+            let memories = if let Some(ref p) = project {
+                longmem.set_project(p);
                 longmem
                     .list_memories()
                     .into_iter()
-                    .filter(|m| m.project.as_deref() == Some(&p))
+                    .filter(|m| m.project.as_deref() == Some(p))
                     .collect()
             } else {
                 longmem.list_memories()
             };
 
             if memories.is_empty() {
-                println!("No hay memorias guardadas");
+                println!("No memories stored");
             } else {
-                for mem in memories {
+                println!("Stored memories ({} total):", memories.len());
+                for mem in &memories {
+                    let preview = if mem.content.len() > 60 {
+                        format!("{}...", &mem.content[..60])
+                    } else {
+                        mem.content.clone()
+                    };
                     println!(
                         "[{}] {} - {}: {}",
                         &mem.id[..8],
                         mem.created_at.format("%Y-%m-%d"),
                         format!("{:?}", mem.memory_type).to_lowercase(),
-                        &mem.content[..mem.content.len().min(80)]
+                        preview
                     );
                 }
             }
@@ -150,24 +169,27 @@ fn main() {
 
         Commands::Stats {} => {
             let stats = longmem.stats();
-            println!("Total de memorias: {}", stats.total_memories);
-            println!("Por tipo:");
+            println!("Total memories: {}", stats.total_memories);
+            println!("By type:");
             for (t, c) in &stats.by_type {
                 println!("  {}: {}", t, c);
             }
-            println!("Proyecto actual: {:?}", stats.project);
-            println!("Sesión: {}", stats.current_session.unwrap_or_default());
+            if let Some(p) = stats.project {
+                println!("Project: {}", p);
+            }
+            if let Some(s) = stats.current_session {
+                println!("Session: {}", &s[..8]);
+            }
         }
 
         Commands::Delete { id } => {
             match longmem.delete_memory(&id) {
-                Ok(()) => println!("Memoria {} eliminada", &id[..8]),
-                Err(e) => eprintln!("Error: {}", e),
+                Ok(()) => println!("Deleted memory: {}", &id[..8]),
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
             }
-        }
-
-        Commands::Consolidate {} => {
-            println!("Consolidación ejecutada (MVP: sin implementación aún)");
         }
     }
 }

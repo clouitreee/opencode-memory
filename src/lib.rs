@@ -83,7 +83,7 @@ impl LongMem {
         self.injector.build_context_block(&cloned)
     }
 
-    pub fn get_context_for_task(&self, task: &str) -> String {
+    pub fn get_context_for_task(&mut self, task: &str) -> String {
         let memories = self.retrieve(task, 10);
         self.build_context(&memories)
     }
@@ -140,5 +140,50 @@ mod tests {
         );
 
         assert!(!memories.is_empty());
+    }
+
+    #[test]
+    fn test_integration_capture_retrieve() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut longmem = LongMem::new(Some(temp_dir.path().to_path_buf())).unwrap();
+        longmem.set_project("test-project");
+
+        // Capture a memory about nginx error
+        longmem.capture_turn(
+            "I got a 502 error on nginx",
+            "Run `sudo systemctl restart nginx` to fix it",
+        );
+
+        // Retrieve with semantic search
+        let results = longmem.retrieve("nginx error", 5);
+        assert!(!results.is_empty());
+
+        // Retrieve with text search fallback
+        let results2 = longmem.retrieve("systemctl", 5);
+        assert!(!results2.is_empty());
+
+        // Build context block
+        let context = longmem.build_context(&results);
+        assert!(!context.is_empty());
+        assert!(context.contains("nginx"));
+    }
+
+    #[test]
+    fn test_persistence() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().to_path_buf();
+
+        // Create and capture
+        {
+            let mut longmem = LongMem::new(Some(path.clone())).unwrap();
+            longmem.capture_turn("test input", "test output");
+        }
+
+        // Restart and verify persistence
+        {
+            let longmem = LongMem::new(Some(path.clone())).unwrap();
+            let memories = longmem.list_memories();
+            assert_eq!(memories.len(), 1);
+        }
     }
 }
