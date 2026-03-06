@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use std::io::{self, BufRead};
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
@@ -60,6 +61,47 @@ enum Commands {
         /// Memory ID to delete
         id: String,
     },
+    /// Watch stdin and extract memories automatically
+    Watch {
+        /// Project name to associate with memories
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Suppress output
+        #[arg(short, long)]
+        quiet: bool,
+    },
+    /// Get relevant context for a task
+    Context {
+        /// Task description
+        #[arg(short, long, required = true)]
+        task: String,
+        /// Maximum number of memories to include
+        #[arg(short, long, default_value = "10")]
+        limit: usize,
+        /// Filter by project name
+        #[arg(short, long)]
+        project: Option<String>,
+    },
+}
+
+const SECRET_PATTERNS: &[&str] = &[
+    r"(?i)\b(api_key|apikey|api-key)\s*[:=]\s*['\"]?[\w-]{20,}",
+    r"(?i)\b(password|passwd|pwd)\s*[:=]\s*['\"]?[\S]{8,}",
+    r"(?i)\b(secret|token|auth)\s*[:=]\s*['\"]?[\w-]{20,}",
+    r"(?i)\b(private_key|privatekey)\s*[:=]",
+    r"(?i)\b(bearer\s+[\w-]{20,})",
+    r"(?i)\b(aws_access_key|aws_secret)\s*[:=]",
+];
+
+fn contains_secrets(text: &str) -> bool {
+    for pattern in SECRET_PATTERNS {
+        if let Ok(re) = regex::Regex::new(pattern) {
+            if re.is_match(text) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn main() {
@@ -189,6 +231,99 @@ fn main() {
                     eprintln!("Error: {}", e);
                     std::process::exit(1);
                 }
+            }
+        }
+
+        Commands::Watch { project, quiet } => {
+            if let Some(p) = project {
+                longmem.set_project(&p);
+            }
+
+            let stdin = io::stdin();
+            let mut total_captured = 0;
+            let mut buffer = String::new();
+
+            for line in stdin.lock().lines() {
+                match line {
+                    Ok(text) => {
+                        buffer.push_str(&text);
+                        buffer.push('\n');
+
+                        if buffer.len() > 512 {
+                            if contains_secrets(&buffer) {
+                                if !quiet {
+                                    eprintln!("Warning: potential secrets detected, skipping");
+                                }
+                                buffer.clear();
+                                continue;
+                            }
+
+                            let memories = longmem.capture_turn(&buffer, "");
+                            total_captured += memories.len();
+
+                            if !quiet && !memories.is_empty() {
+                                for mem in &memories {
+                                    let preview = if mem.content.len() > 50 {
+                                        format!("{}...", &mem.content[..50])
+                                    } else {
+                                        mem.content.clone()
+                                    };
+                                    eprintln!("[watch] captured: {}", preview);
+                                }
+                            }
+                            buffer.clear();
+                        }
+                    }
+                    Err(e) => {
+                        if !quiet {
+                            eprintln!("Error reading stdin: {}", e);
+                        }
+                        break;
+                    }
+                }
+            }
+
+            if !buffer.trim().is_empty() {
+                if contains_secrets(&buffer) {
+                    if !quiet {
+                        eprintln!("Warning: potential secrets detected, skipping");
+                    }
+                } else {
+                    let memories = longmem.capture_turn(&buffer, "");
+                    total_captured += memories.len();
+
+                    if !quiet && !memories.is_empty() {
+                        for mem in &memories {
+                            let preview = if mem.content.len() > 50 {
+                                format!("{}...", &mem.content[..50])
+                            } else {
+                                mem.content.clone()
+                            };
+                            eprintln!("[watch] captured: {}", preview);
+                        }
+                    }
+                }
+            }
+
+            if !quiet {
+                eprintln!("[watch] total memories captured: {}", total_captured);
+            }
+        }
+
+        Commands::Context {
+            task,
+            limit,
+            project,
+        } => {
+            if let Some(p) = project {
+                longmem.set_project(&p);
+            }
+            let memories = longmem.retrieve(&task, limit);
+            if memories.is_empty() {
+                // Empty output, no context found
+            } else {
+                let context = longmem.build_context(&memories);
+                println!("{}", context);
             }
         }
     }

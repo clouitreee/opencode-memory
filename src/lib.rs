@@ -186,4 +186,27 @@ mod tests {
             assert_eq!(memories.len(), 1);
         }
     }
+
+    #[test]
+    fn test_context_empty() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut longmem = LongMem::new(Some(temp_dir.path().to_path_buf())).unwrap();
+
+        let results = longmem.retrieve("completely unrelated query xyz123", 5);
+        assert!(results.is_empty());
+
+        let context = longmem.build_context(&results);
+        assert!(context.is_empty());
+    }
+
+    #[test]
+    fn test_capture_empty_input() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut longmem = LongMem::new(Some(temp_dir.path().to_path_buf())).unwrap();
+
+        // Empty strings should not crash
+        let memories = longmem.capture_turn("", "");
+        // May be empty or have some generic memory, but shouldn't panic
+        let _ = memories.len();
+    }
 }

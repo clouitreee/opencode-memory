@@ -1,8 +1,8 @@
-# LongMem
+# LongMem (lmem)
 
-LongMem is a local-first memory layer for terminal-based AI workflows.
+LongMem is an **active memory layer** for terminal-based AI workflows.
 
-It helps language models and CLI agents remember relevant technical context across sessions, so users do not have to repeat the same project details, environment constraints, and previously solved issues every time.
+Unlike static instruction files (`claude.md`) or manual memory dumps (`memory.md`), LongMem actively observes, extracts, stores, and injects relevant technical context while your agent works.
 
 ## Why LongMem
 
@@ -14,35 +14,53 @@ That creates repeated work:
 - Re-solving the same errors
 - Losing technical decisions made in earlier sessions
 
-LongMem solves this by capturing relevant memories, storing them locally, and retrieving the most useful context when needed.
+LongMem solves this by:
+- **Watching** your session and extracting useful memories automatically
+- **Storing** relevant context locally with semantic embeddings
+- **Feeding** the right context back when you need it
+
+## What makes it different
+
+| Static files | LongMem |
+|--------------|---------|
+| Manual updates | Automatic extraction |
+| User maintains | System observes and learns |
+| Static context | Dynamic, relevant context |
+| Copy/paste | Pipes and streams |
 
 ## MVP Scope
 
 This repository currently focuses on a small local MVP.
 
 **Included:**
-- Local memory capture from conversation turns
+- Active memory capture via `watch` command
 - Local JSON-based persistence
 - Semantic retrieval using local embeddings
 - Context block generation for prompt injection
-- CLI commands for basic memory workflows
+- Basic secret filtering
 
 **Not included yet:**
+- Background daemon
+- File watch mode
 - Shell hooks
 - Remote sync
 - Multi-user support
-- Advanced ranking pipelines
-- Production packaging for every platform
 
 ## Commands
 
-Current CLI commands:
+### Core commands
+
 - `init` — Initialize LongMem state
-- `capture` — Store a conversation turn (user input + model output)
+- `capture` — Store a conversation turn manually
 - `retrieve` — Search for relevant memories
 - `list` — List stored memories
 - `stats` — Show memory statistics
 - `delete` — Delete a memory by ID
+
+### Runtime commands (active memory)
+
+- `watch` — Watch stdin and extract memories automatically
+- `context` — Get relevant context for a task
 
 Run help:
 ```bash
@@ -79,16 +97,30 @@ Initialize local state:
 longmem init --project my-project
 ```
 
+### Manual workflow (capture)
+
 Capture a memory from a session:
 
 ```bash
 longmem capture -u "I hit a 502 error" -m "nginx -t showed an upstream config issue"
 ```
 
-Retrieve relevant context later:
+### Active workflow (watch + context)
+
+Watch a session and extract memories automatically:
 
 ```bash
-longmem retrieve -q "nginx 502 errors"
+# Pipe agent output to lmem watch
+some-agent-command | longmem watch --project my-project
+
+# Or manually pipe text
+echo "Error: port 8080 blocked. Fixed by changing to port 3000." | longmem watch
+```
+
+Get relevant context for a task:
+
+```bash
+longmem context "fix port errors"
 ```
 
 List stored memories:
@@ -133,13 +165,18 @@ All computation happens locally on the user's machine.
 
 LongMem is designed to keep memory data local. No data is sent to external services by default.
 
-However, stored memories may include technical context such as:
+**Basic secret filtering** is implemented in `watch` mode:
+- Detects common patterns: API keys, passwords, tokens, secrets
+- Skips lines matching these patterns
+- **Warning**: This is NOT comprehensive. Do not rely on it for sensitive data.
+
+Stored memories may include technical context such as:
 - File paths
 - Commands
 - Environment details
 - Error descriptions
 
-Review local file permissions and avoid storing secrets in plain text until stronger protections are added.
+Review local file permissions and avoid storing secrets in plain text.
 
 ## Limitations
 
